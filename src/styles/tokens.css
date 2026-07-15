@@ -1,0 +1,27 @@
+:root {
+  --brand-primary: #e34b45;
+  --brand-strong: #c93632;
+  --brand-deep: #a92f2b;
+  --brand-highlight: #f0675f;
+  --brand-soft: #fff0ee;
+  --brand-soft-subtle: #fff3f2;
+  --brand-dark-accent: #ff817a;
+  --brand-primary-rgb: 227, 75, 69;
+  --brand-strong-rgb: 201, 54, 50;
+  --brand-dark-accent-rgb: 255, 129, 122;
+  --ui-control-height-compact: 28px;
+  --ui-control-height-default: 36px;
+  --ui-control-height-large: 40px;
+  --ui-field-height-compact: 32px;
+  --ui-field-height-default: 38px;
+  --ui-icon-button-size: 32px;
+  --ui-radius-compact: 7px;
+  --ui-radius-small: 8px;
+  --ui-radius-control: 9px;
+  --ui-radius-search: 11px;
+  --ui-radius-card: 12px;
+  --ui-radius-modal: 18px;
+  --ui-focus-ring-size: 3px;
+  --ui-shadow-card: 0 8px 22px rgba(64, 30, 28, .055);
+  --ui-shadow-modal: 0 28px 90px rgba(10, 13, 23, .28);
+}

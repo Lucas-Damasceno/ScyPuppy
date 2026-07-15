@@ -1,0 +1,40 @@
+.markdown-document {
+  font-size: 12px;
+  line-height: 1.7;
+  user-select: text;
+}
+
+.markdown-document > :first-child { margin-top: 0; }
+.markdown-document > :last-child { margin-bottom: 0; }
+.markdown-document h1 { font-size: 24px; }
+.markdown-document h2 { margin-top: 28px; font-size: 18px; }
+.markdown-document h3 { margin-top: 22px; font-size: 14px; }
+.markdown-document p,
+.markdown-document ul,
+.markdown-document ol,
+.markdown-document blockquote,
+.markdown-document pre { margin: 12px 0; }
+.markdown-document ul,
+.markdown-document ol { padding-left: 22px; }
+.markdown-document blockquote {
+  padding-left: 14px;
+  border-left: 3px solid var(--accent);
+  color: var(--text-secondary);
+}
+.markdown-document code {
+  padding: 2px 5px;
+  border-radius: 5px;
+  background: var(--control);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+}
+.markdown-document pre {
+  padding: 14px;
+  overflow-x: auto;
+  border: 1px solid var(--line-soft);
+  border-radius: 9px;
+  background: var(--control);
+  white-space: pre-wrap;
+}
+.markdown-document pre code { padding: 0; background: transparent; }
+.markdown-document hr { margin: 24px 0; border: 0; border-top: 1px solid var(--line); }

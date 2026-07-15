@@ -1,0 +1,7 @@
+{
+  "default": "icons/scrypuppy-brand.svg",
+  "bg_color": "transparent",
+  "android_fg": "../public/scrypuppy.svg",
+  "android_fg_scale": 82,
+  "android_monochrome": "../public/scrypuppy.svg"
+}
