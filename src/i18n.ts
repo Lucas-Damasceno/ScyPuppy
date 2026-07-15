@@ -55,6 +55,24 @@ const portuguese: Record<string, string> = {
   "For example: “What is the application ID for application X?”": "Por exemplo: “Qual é o application ID da aplicação X?”",
   "Your data stays on this computer": "Seus dados permanecem neste computador",
   "Full text": "Texto completo",
+  "Captured files": "Arquivos capturados",
+  "Files": "Arquivos",
+  "Rich content": "ConteÃºdo formatado",
+  "Link": "Link",
+  "Clipboard formats": "Formatos da Ã¡rea de transferÃªncia",
+  "{count} files": "{count} arquivos",
+  "{count} items": "{count} itens",
+  "File": "Arquivo",
+  "Folder": "Pasta",
+  "Application file": "Aplicativo",
+  "Shortcut": "Atalho",
+  "Virtual file": "Arquivo virtual",
+  "Available": "DisponÃ­vel",
+  "Unavailable": "IndisponÃ­vel",
+  "This capture can no longer be copied because its original content is unavailable.": "Esta captura nÃ£o pode mais ser copiada porque o conteÃºdo original estÃ¡ indisponÃ­vel.",
+  "The original files are no longer available at their saved locations.": "Os arquivos originais nÃ£o estÃ£o mais disponÃ­veis nos locais salvos.",
+  "Clipboard access is temporarily unavailable. Restart ScryPuppy if this continues.": "O acesso Ã  Ã¡rea de transferÃªncia estÃ¡ temporariamente indisponÃ­vel. Reinicie o ScryPuppy se isso continuar.",
+  "Windows took too long to provide the clipboard content. Try copying it again.": "O Windows demorou demais para fornecer o conteÃºdo da Ã¡rea de transferÃªncia. Tente copiÃ¡-lo novamente.",
   "Source and metadata": "Origem e metadados",
   "Application": "Aplicação",
   "Captured at": "Capturado em",
@@ -615,11 +633,24 @@ function metadataRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/**
- * Builds app-generated labels from structured capture metadata. The text parser
- * is only a compatibility fallback for captures created by older versions.
- */
+/** Builds user-facing labels from the structured clipboard representation. */
 export function captureDisplayText(language: AppLanguage, capture: Capture): string {
+  if (capture.content_kind === "files" && capture.files.length > 0) {
+    if (capture.files.length === 1) return capture.files[0].display_name;
+    const names = capture.files.slice(0, 3).map((file) => file.display_name).join(", ");
+    const suffix = capture.files.length > 3 ? ` +${capture.files.length - 3}` : "";
+    return `${translate(language, "{count} files", { count: capture.files.length })}: ${names}${suffix}`;
+  }
+  const imageRepresentation = capture.representations.find((item) => item.kind === "image");
+  const imageMetadata = metadataRecord(imageRepresentation?.metadata);
+  if (imageMetadata) {
+    const width = imageMetadata.width;
+    const height = imageMetadata.height;
+    if ((typeof width === "number" || typeof width === "string")
+      && (typeof height === "number" || typeof height === "string")) {
+      return translate(language, "[Image copied from clipboard: {width}x{height}]", { width, height });
+    }
+  }
   const metadata = metadataRecord(capture.metadata);
   const clipboardImage = metadataRecord(metadata?.clipboard_image);
   const width = clipboardImage?.width;

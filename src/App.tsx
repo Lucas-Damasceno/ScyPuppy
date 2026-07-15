@@ -210,6 +210,13 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
             <div className="paste-empty"><Icon name="copy" size={22} /><strong>{tr("No items found")}</strong><span>{tr("Try another search.")}</span></div>
           ) : items.map((item, index) => {
             const imageAsset = item.assets.find((asset) => ["clipboard_image", "imported_image"].includes(asset.kind) && asset.path);
+            const contentIcon: IconName | null = item.content_kind === "files"
+              ? "folder"
+              : item.content_kind === "url"
+                ? "link"
+                : item.content_kind === "html" || item.content_kind === "rich_text"
+                  ? "layers"
+                  : null;
             return (
               <button
                 className={`paste-result ${index === selectedIndex ? "is-selected" : ""}`}
@@ -224,13 +231,25 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
                 {imageAsset?.path ? (
                   <img className="paste-result-image" src={convertFileSrc(imageAsset.path)} alt="" />
                 ) : (
-                  <span className="paste-result-app">{appInitial(item.source_app_name)}</span>
+                  <span className="paste-result-app">{contentIcon ? <Icon name={contentIcon} size={16} /> : appInitial(item.source_app_name)}</span>
                 )}
                 <span className="paste-result-copy">
                   <strong>{captureDisplayText(language, item).replace(/\s+/g, " ").trim()}</strong>
                   <span>{item.source_app_name ?? tr("Unknown application")} · {formatListDate(item.captured_at)}</span>
                 </span>
-                <span className="paste-result-kind">{item.kind === "reference" ? tr("Reference") : tr("Capture")}</span>
+                <span className="paste-result-kind">{tr(
+                  item.kind === "reference"
+                    ? "Reference"
+                    : item.content_kind === "files"
+                      ? "Files"
+                      : item.content_kind === "url"
+                        ? "Link"
+                        : item.content_kind === "html" || item.content_kind === "rich_text"
+                          ? "Rich content"
+                          : item.content_kind === "image"
+                            ? "Image capture"
+                            : "Capture",
+                )}</span>
               </button>
             );
           })}
@@ -390,7 +409,8 @@ function QuickContextPanel() {
   const visibleContexts = filtered.slice(0, settings.quick_context_show_preview ? 4 : 6);
   const canCreate = Boolean(search.trim()) && !contexts.some((context) => context.normalized_name === search.trim().toLowerCase());
   const optionCount = visibleContexts.length + (canCreate ? 1 : 0);
-  const isImageCapture = capture.assets.some((asset) => ["clipboard_image", "imported_image"].includes(asset.kind));
+  const isImageCapture = capture.content_kind === "image" || capture.assets.some((asset) => ["clipboard_image", "imported_image"].includes(asset.kind));
+  const isFileCapture = capture.content_kind === "files";
 
   function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -414,8 +434,8 @@ function QuickContextPanel() {
         </header>
         <div className="quick-context-body">
           {settings.quick_context_show_preview && <div className="quick-context-preview">
-            <span className="quick-context-preview-icon"><Icon name={isImageCapture ? "image" : "copy"} size={15} /></span>
-            <span className="quick-context-preview-copy"><strong>{tr(isImageCapture ? "Image capture" : "Capture")}</strong><small>{captureDisplayText(language, capture).replace(/^\[|\]$/g, "")}</small></span>
+            <span className="quick-context-preview-icon"><Icon name={isImageCapture ? "image" : isFileCapture ? "folder" : "copy"} size={15} /></span>
+            <span className="quick-context-preview-copy"><strong>{tr(isImageCapture ? "Image capture" : isFileCapture ? "Captured files" : "Capture")}</strong><small>{captureDisplayText(language, capture).replace(/^\[|\]$/g, "")}</small></span>
           </div>}
           <div className="quick-context-search"><Icon name="search" size={14} /><input value={search} onChange={(event) => { setSearch(event.currentTarget.value); setActiveOption(0); }} onKeyDown={handleSearchKeyDown} onFocus={() => setIsSearching(true)} onBlur={() => setIsSearching(false)} placeholder={tr("Search or create a context")} aria-label={tr("Search contexts")} aria-controls="quick-context-options" aria-expanded={Boolean(search.trim() || isSearching)} autoComplete="off" spellCheck={false} />{search && <button onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearch(""); setActiveOption(0); }} aria-label={tr("Clear search")}><Icon name="close" size={12} /></button>}</div>
           <div className="quick-context-section-label"><span>{tr(normalizedSearch ? "Available contexts" : settings.quick_context_show_recent ? "Recent contexts" : "Contexts")}</span>{capture.contexts.length > 0 && <small>{capture.contexts.length} {tr("Assigned contexts").toLowerCase()}</small>}</div>

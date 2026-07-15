@@ -81,7 +81,7 @@ The backend owns error classification and may include only display-safe paramete
 
 The frontend normalizes every `invoke` rejection in `src/api/tauri.ts`, resolves the code through `src/appMessages.ts`, and applies the selected locale only at the presentation boundary. UI copy in `src/i18n.ts` never attempts to identify backend errors by comparing sentences. A small legacy adapter recognizes errors emitted by older installed binaries and can be removed after that compatibility window ends.
 
-App-generated capture labels are derived from structured `metadata` such as `clipboard_image.width`, `clipboard_image.height`, and imported file metadata. `content_text` is reserved for user-authored or OCR content. A text parser remains only to display captures persisted by older versions.
+App-generated capture labels are derived from structured representations and file entries. `content_text` is the safe searchable fallback; it is never the source of truth for restoring rich content or files.
 
 ## Capture pipeline
 
@@ -99,10 +99,10 @@ sequenceDiagram
     U->>R: Ctrl+Shift+C or Ctrl+Shift+S
     R->>W: Simulate Copy
     W->>C: Publish selected content
-    R->>C: Read text or image
+    R->>C: Read one multi-format snapshot on the OLE STA thread
     R->>R: Collect foreground metadata
     R->>R: Detect recent duplicate
-    R->>D: Commit the capture and required clipboard-image asset
+    R->>D: Commit representations, file entries, format metadata, and assets
     R-->>Q: Emit committed capture and show immediately
     R->>D: Enrich with screenshot, entities, tags, and OCR queue
     opt Supported image
@@ -126,7 +126,11 @@ The Tauri process creates one tray icon from the configured ScryPuppy applicatio
 
 ### Optional clipboard monitor
 
-`WM_CLIPBOARDUPDATE` is handled on a dedicated Windows message-only thread. The listener starts from the current clipboard sequence number, reads text before images, collects active-window metadata, and sends payloads to a serialized persistence worker. It never simulates a keyboard copy.
+`WM_CLIPBOARDUPDATE` is handled on a dedicated Windows message-only thread. The listener starts from the current clipboard sequence number, collects active-window metadata, and asks a dedicated OLE STA service for one immutable snapshot. It never simulates a keyboard copy.
+
+The snapshot can preserve `CF_UNICODETEXT`, HTML, RTF, URL, `CF_DIBV5`, physical file/folder drops, and shell virtual files. Unknown registered formats are recorded by name and ID but their private bytes are never ingested blindly. Quick Paste reconstructs all restorable representations and publishes them together, including `Preferred DropEffect=COPY` for file lists.
+
+Physical files, folders, shortcuts, and executables remain references to their original paths. Executables are never launched. Virtual files such as Outlook attachments are bounded, sanitized, and materialized atomically under `assets/clipboard-files/<capture-id>/`. UNC paths are not statted during capture, preventing a passive clipboard event from initiating a network lookup.
 
 Explicit hotkeys and automatic copies share the same persistence path. Automatic copies always use the regular capture kind, enter the unassigned collection, and record their origin in metadata.
 
@@ -147,6 +151,9 @@ The encrypted SQLite schema is created and evolved in `migrate()`.
 | --- | --- |
 | `captures` | Content, hashes, timestamps, source metadata, platform, and capture kind |
 | `capture_assets` | Clipboard images, imported images, screenshots, status, and local paths |
+| `capture_representations` | Ordered text, HTML, RTF, URL, image, and file-list representations used for lossless restore |
+| `capture_file_entries` | Physical references and materialized virtual files with kind, integrity, availability, and size |
+| `capture_clipboard_formats` | Supported and unsupported Windows clipboard format metadata |
 | `contexts` | User-managed normalized Contexts |
 | `capture_contexts` | Many-to-many Context assignments with origin and confidence |
 | `capture_tags` | Deterministic content descriptors |
@@ -159,7 +166,7 @@ The encrypted SQLite schema is created and evolved in `migrate()`.
 
 `capture_contexts` uses `(capture_id, context_id)` as its primary key, so repeated assignments are idempotent. Deleting a Context removes associations but not capture records.
 
-The Lite workspace exposes **Everything**, user-created Contexts, and Documents. Backend compatibility still distinguishes ordinary unassigned captures and durable references for migrations and command behavior.
+The Lite workspace exposes **Everything**, user-created Contexts, and Documents. The multi-format schema is intentionally a breaking contract: there is no legacy representation adapter or backfill path.
 
 ## Context organization
 
@@ -167,7 +174,7 @@ Users can create a Context, assign it from capture details, or add several exist
 
 The backend retains deterministic and optional AI-assisted organization for compatibility. Local analysis considers URLs, repositories, applications, window titles, paths, commands, hashes, UUIDs, tags, entities, existing Contexts, and temporal proximity. Suggestions are reviewable and never remove manual associations.
 
-Optional AI receives bounded text and metadata only. Images and screenshots are excluded, relevant OCR text is treated as text evidence, and local results remain available if a provider fails.
+Optional AI receives bounded safe text and metadata only. Binary payloads and complete file paths are excluded. Images and screenshots are excluded, relevant redacted OCR text is treated as text evidence, and local results remain available if a provider fails.
 
 ## Search and documents
 
@@ -196,6 +203,9 @@ All plugins and managed state required by startup commands are registered before
 - Clipboard content is not sent externally by default.
 - AI requires an explicit user action.
 - Images and screenshots are excluded from AI requests.
+- File bytes, executable contents, private clipboard formats, and complete filesystem paths are excluded from AI requests.
+- Stored HTML is never rendered directly; the UI uses its plain-text fallback.
+- Virtual file names are sanitized, per-file and per-capture byte limits are enforced, and incomplete `.part` files are removed during startup recovery.
 - Recognized credentials in queries, capture text, metadata, entities, and OCR text are replaced before every provider call. Magic Search uses opaque placeholders backed by an in-memory map; document mode restores them only after the response returns locally. The map is never sent or persisted.
 - Evidence excerpts remain redacted. A generated or exported document can contain restored credentials, so it must be handled as sensitive local data.
 - Clipboard content and credentials must never be written to logs.

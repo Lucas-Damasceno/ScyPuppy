@@ -221,8 +221,10 @@ fn monitor_loop(
                     last_sequence = sequence;
                     if !state.consume_ignored_clipboard_sequence(sequence) {
                         let active_window = collect_active_window();
-                        if let Ok(Some(payload)) = read_clipboard_payload() {
-                            if matches!(&payload, ClipboardPayload::Text(text) if super::is_internal_clipboard_marker(text))
+                        if let Ok(Some(payload)) = read_clipboard_payload(&state) {
+                            if payload
+                                .plain_text()
+                                .is_some_and(super::is_internal_clipboard_marker)
                             {
                                 continue;
                             }

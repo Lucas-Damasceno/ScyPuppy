@@ -4,7 +4,7 @@ compile_error!(
 );
 
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -14,7 +14,7 @@ use std::{
 };
 
 use active_win_pos_rs::get_active_window;
-use arboard::{Clipboard, ImageData};
+use arboard::ImageData;
 use chrono::{DateTime, Local, Utc};
 use enigo::{
     Direction::{Click, Press, Release},
@@ -32,12 +32,17 @@ use uuid::Uuid;
 
 mod ai;
 mod app_error;
+mod clipboard;
 mod clipboard_monitor;
 mod crypto;
 use ai::ProviderOption as AiProviderOption;
 use app_error::{command_result, AppError, AppNotice, CommandResult};
+use clipboard::{
+    ClipboardFile, ClipboardFileAvailability, ClipboardFileKind, ClipboardImage,
+    ClipboardRepresentation, ClipboardRepresentationKind, ClipboardService, ClipboardSnapshot,
+};
 use clipboard_monitor::ClipboardMonitorHandle;
-use crypto::{encrypt_context_file, image_sha256_hex, sha256_hex};
+use crypto::{encrypt_context_file, sha256_hex};
 
 #[cfg(target_os = "windows")]
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
@@ -87,6 +92,7 @@ struct AppState {
     context_key: String,
     capture_gate: Arc<Mutex<CaptureGate>>,
     ignored_clipboard_sequences: Arc<Mutex<SequenceSuppression>>,
+    clipboard: Arc<ClipboardService>,
     clipboard_monitor: Arc<ClipboardMonitorHandle>,
     ocr_worker_running: Arc<Mutex<bool>>,
     paste_target_window: Arc<Mutex<Option<isize>>>,
@@ -165,8 +171,8 @@ impl AppState {
         self.app_dir.join("assets").join("clipboard-images")
     }
 
-    fn imported_images_dir(&self) -> PathBuf {
-        self.app_dir.join("assets").join("imported-images")
+    fn clipboard_files_dir(&self) -> PathBuf {
+        self.app_dir.join("assets").join("clipboard-files")
     }
 }
 
@@ -212,6 +218,43 @@ struct CaptureAssetDto {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+struct CaptureRepresentationDto {
+    id: String,
+    kind: String,
+    format_name: String,
+    mime_type: Option<String>,
+    text_content: Option<String>,
+    asset_path: Option<String>,
+    size_bytes: Option<i64>,
+    sha256: Option<String>,
+    restorable: bool,
+    metadata: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CaptureFileDto {
+    id: String,
+    representation_id: String,
+    ordinal: i64,
+    display_name: String,
+    original_path: Option<String>,
+    local_path: Option<String>,
+    entry_kind: String,
+    extension: Option<String>,
+    size_bytes: Option<i64>,
+    sha256: Option<String>,
+    availability: String,
+    metadata: Value,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CaptureClipboardFormatDto {
+    id: i64,
+    name: String,
+    supported: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct CaptureDto {
     id: String,
     content_text: String,
@@ -224,8 +267,12 @@ struct CaptureDto {
     window_id: Option<String>,
     platform: String,
     kind: String,
+    content_kind: String,
     metadata: Value,
     assets: Vec<CaptureAssetDto>,
+    representations: Vec<CaptureRepresentationDto>,
+    files: Vec<CaptureFileDto>,
+    clipboard_formats: Vec<CaptureClipboardFormatDto>,
     tags: Vec<String>,
     entities: Vec<CaptureEntityDto>,
     ocr: Option<CaptureOcrDto>,
@@ -508,34 +555,7 @@ struct LocalEntity {
     confidence: f64,
 }
 
-#[derive(Debug)]
-enum ClipboardPayload {
-    Text(String),
-    Image(ImageData<'static>),
-}
-
-impl ClipboardPayload {
-    fn content_text(&self) -> String {
-        match self {
-            ClipboardPayload::Text(text) => text.clone(),
-            ClipboardPayload::Image(_) => String::new(),
-        }
-    }
-
-    fn content_hash(&self) -> String {
-        match self {
-            ClipboardPayload::Text(text) => content_hash(text),
-            ClipboardPayload::Image(image) => image_content_hash(image),
-        }
-    }
-
-    fn image_dimensions(&self) -> Option<(usize, usize)> {
-        match self {
-            ClipboardPayload::Text(_) => None,
-            ClipboardPayload::Image(image) => Some((image.width, image.height)),
-        }
-    }
-}
+type ClipboardPayload = ClipboardSnapshot;
 
 #[tauri::command]
 async fn run_capture(app: AppHandle, state: State<'_, AppState>) -> CommandResult<CaptureDto> {
@@ -619,6 +639,8 @@ fn capture_query_parts(filter: &CaptureFilter) -> CaptureQueryParts {
     {
         where_parts.push(
             "(c.content_text LIKE ?
+              OR EXISTS (SELECT 1 FROM capture_representations sr WHERE sr.capture_id = c.id AND sr.text_content LIKE ?)
+              OR EXISTS (SELECT 1 FROM capture_file_entries sf WHERE sf.capture_id = c.id AND (sf.display_name LIKE ? OR sf.extension LIKE ?))
               OR o.text LIKE ?
               OR c.source_app_name LIKE ?
               OR c.window_title LIKE ?
@@ -630,7 +652,7 @@ fn capture_query_parts(filter: &CaptureFilter) -> CaptureQueryParts {
                 .to_string(),
         );
         let pattern = format!("%{}%", search.trim());
-        for _ in 0..7 {
+        for _ in 0..10 {
             args.push(pattern.clone());
         }
         search_pattern = Some(pattern);
@@ -677,7 +699,9 @@ fn list_captures_from_conn(
     if let Some(pattern) = parts.search_pattern {
         sql.push_str(
             " ORDER BY CASE
-                WHEN lower(c.content_text) LIKE lower(?) THEN 5
+                WHEN lower(c.content_text) LIKE lower(?)
+                  OR EXISTS (SELECT 1 FROM capture_representations rr WHERE rr.capture_id = c.id AND lower(rr.text_content) LIKE lower(?))
+                  OR EXISTS (SELECT 1 FROM capture_file_entries rf WHERE rf.capture_id = c.id AND (lower(rf.display_name) LIKE lower(?) OR lower(rf.extension) LIKE lower(?))) THEN 5
                 WHEN lower(o.text) LIKE lower(?) THEN 4
                 WHEN lower(c.source_app_name) LIKE lower(?) OR lower(c.window_title) LIKE lower(?) THEN 3
                 WHEN EXISTS (SELECT 1 FROM capture_tags ot WHERE ot.capture_id = c.id AND lower(ot.tag) LIKE lower(?))
@@ -687,7 +711,7 @@ fn list_captures_from_conn(
                              WHERE occ.capture_id = c.id AND lower(oco.name) LIKE lower(?)) THEN 1
                 ELSE 0 END DESC, c.captured_at DESC",
         );
-        for _ in 0..7 {
+        for _ in 0..10 {
             args.push(pattern.clone());
         }
     } else {
@@ -705,7 +729,7 @@ fn list_captures_from_conn(
         .map_err(err)?
         .collect::<Result<Vec<_>, _>>()
         .map_err(err)?;
-    hydrate_captures(&conn, &mut captures)?;
+    hydrate_captures(conn, &mut captures)?;
 
     Ok(captures)
 }
@@ -792,6 +816,7 @@ fn delete_capture(state: State<AppState>, id: String) -> CommandResult<()> {
             let _ = secure_remove_file(Path::new(&path));
         }
     }
+    let _ = secure_remove_dir(&state.clipboard_files_dir().join(&id));
     sync_contexts_best_effort(&state, &context_ids);
     Ok(())
 }
@@ -1586,33 +1611,98 @@ fn copy_capture_to_clipboard_core(state: &AppState, id: &str) -> Result<(), Stri
 }
 
 fn write_capture_to_clipboard(state: &AppState, capture: &CaptureDto) -> Result<(), String> {
-    let image_path = capture
-        .assets
+    let mut representations = Vec::new();
+    for representation in capture
+        .representations
         .iter()
-        .find(|asset| {
-            matches!(asset.kind.as_str(), "clipboard_image" | "imported_image")
-                && asset.status == "saved"
-                && asset.path.is_some()
-        })
-        .and_then(|asset| asset.path.as_deref());
-
-    if let Some(path) = image_path {
-        let image = image::open(path).map_err(err)?.to_rgba8();
-        let (width, height) = image.dimensions();
-        write_clipboard_image(
-            state,
-            &ImageData {
-                width: width as usize,
-                height: height as usize,
-                bytes: std::borrow::Cow::Owned(image.into_raw()),
-            },
-        )
-        .map_err(err)?;
-    } else {
-        write_clipboard_text(state, &capture.content_text).map_err(err)?;
+        .filter(|representation| representation.restorable)
+    {
+        match representation.kind.as_str() {
+            "plain_text" => {
+                if let Some(value) = &representation.text_content {
+                    representations.push(ClipboardRepresentation::PlainText(value.clone()));
+                }
+            }
+            "html" => {
+                if let Some(value) = &representation.text_content {
+                    representations.push(ClipboardRepresentation::Html(value.clone()));
+                }
+            }
+            "rich_text" => {
+                if let Some(value) = &representation.text_content {
+                    representations.push(ClipboardRepresentation::RichText(value.clone()));
+                }
+            }
+            "url" => {
+                if let Some(value) = &representation.text_content {
+                    representations.push(ClipboardRepresentation::Url(value.clone()));
+                }
+            }
+            "image" => {
+                if let Some(path) = &representation.asset_path {
+                    let image = image::open(path).map_err(err)?.to_rgba8();
+                    let (width, height) = image.dimensions();
+                    representations.push(ClipboardRepresentation::Image(ClipboardImage {
+                        width: width as usize,
+                        height: height as usize,
+                        rgba: image.into_raw(),
+                    }));
+                }
+            }
+            "files" => {
+                let files = capture
+                    .files
+                    .iter()
+                    .filter(|file| file.representation_id == representation.id)
+                    .filter_map(clipboard_file_from_dto)
+                    .collect::<Vec<_>>();
+                if !files.is_empty() {
+                    representations.push(ClipboardRepresentation::Files(files));
+                }
+            }
+            _ => {}
+        }
     }
+    if representations.is_empty() {
+        return Err("This capture has no restorable clipboard representation.".into());
+    }
+    write_clipboard_payload(
+        state,
+        &ClipboardSnapshot {
+            representations,
+            formats: Vec::new(),
+        },
+    )
+}
 
-    Ok(())
+fn clipboard_file_from_dto(file: &CaptureFileDto) -> Option<ClipboardFile> {
+    let path = file
+        .local_path
+        .as_deref()
+        .or(file.original_path.as_deref())
+        .map(PathBuf::from)?;
+    let kind = match file.entry_kind.as_str() {
+        "directory" => ClipboardFileKind::Directory,
+        "application" => ClipboardFileKind::Application,
+        "shortcut" => ClipboardFileKind::Shortcut,
+        "virtual_file" => ClipboardFileKind::VirtualFile,
+        _ => ClipboardFileKind::File,
+    };
+    let availability = if clipboard::is_network_path(&path) {
+        ClipboardFileAvailability::Unverified
+    } else if path.exists() {
+        ClipboardFileAvailability::Available
+    } else {
+        return None;
+    };
+    Some(ClipboardFile {
+        display_name: file.display_name.clone(),
+        original_path: Some(path),
+        kind,
+        size_bytes: file.size_bytes.map(|value| value.max(0) as u64),
+        bytes: None,
+        availability,
+    })
 }
 
 fn show_paste_palette(app: &AppHandle, state: &AppState) -> Result<(), String> {
@@ -1812,7 +1902,9 @@ fn setup_windows_tray(app: &mut tauri::App) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             "tray-open" => restore_main_window(app),
             "tray-quit" => {
-                app.state::<AppState>().clipboard_monitor.shutdown();
+                let state = app.state::<AppState>();
+                state.clipboard_monitor.shutdown();
+                state.clipboard.shutdown();
                 app.exit(0);
             }
             _ => {}
@@ -1890,7 +1982,7 @@ fn run_capture_core(
     context_id: &str,
 ) -> Result<CaptureDto, String> {
     let active_window = collect_active_window();
-    let previous_clipboard = read_clipboard_payload().ok().flatten();
+    let previous_clipboard = read_clipboard_payload(&state).ok().flatten();
     let clipboard_marker = format!("__CLIPSCRY_COPY_MARKER_{}__", Uuid::new_v4());
     write_clipboard_text(&state, &clipboard_marker)
         .map_err(|error| format!("Nao foi possivel preparar o clipboard: {error}"))?;
@@ -1901,7 +1993,7 @@ fn run_capture_core(
         return Err(format!("Falha ao acionar copia nativa: {error}"));
     }
 
-    let payload = match read_clipboard_after_copy(&clipboard_marker) {
+    let payload = match read_clipboard_after_copy(&state, &clipboard_marker) {
         Ok(payload) => payload,
         Err(error) => {
             if let Some(previous_clipboard) = previous_clipboard {
@@ -1912,7 +2004,12 @@ fn run_capture_core(
     };
     mark_current_clipboard_sequence(&state);
 
-    if capture_kind == "reference" && matches!(payload, ClipboardPayload::Image(_)) {
+    if capture_kind == "reference"
+        && matches!(
+            payload.primary_kind(),
+            ClipboardRepresentationKind::Files | ClipboardRepresentationKind::Image
+        )
+    {
         return Err(
             "A Base de conteúdo aceita texto selecionado. Selecione texto antes de usar o atalho."
                 .into(),
@@ -1941,7 +2038,11 @@ fn persist_clipboard_payload(
 ) -> Result<CaptureDto, String> {
     let _session = begin_capture(&state)?;
     let content_text = payload.content_text();
-    if matches!(&payload, ClipboardPayload::Text(text) if text.trim().is_empty()) {
+    if payload.is_empty()
+        || (payload.content_text().trim().is_empty()
+            && payload.image().is_none()
+            && payload.files().is_none())
+    {
         return Err("O clipboard nao retornou conteudo para salvar.".into());
     }
 
@@ -2000,8 +2101,23 @@ fn persist_clipboard_payload(
         )
         .map_err(err)?;
 
-    if let ClipboardPayload::Image(image) = &payload {
-        insert_clipboard_image_asset(&transaction, &state, &capture_id, image)?;
+    if let Some(image) = payload.image() {
+        insert_clipboard_image_asset(
+            &transaction,
+            &state,
+            &capture_id,
+            &ImageData {
+                width: image.width,
+                height: image.height,
+                bytes: std::borrow::Cow::Owned(image.rgba.clone()),
+            },
+        )?;
+    }
+    if let Err(error) =
+        persist_clipboard_representations(&transaction, &state, &capture_id, &payload, &captured_at)
+    {
+        let _ = secure_remove_dir(&state.clipboard_files_dir().join(&capture_id));
+        return Err(error);
     }
 
     let settings = settings_from_conn(&transaction, &state)?;
@@ -4529,7 +4645,7 @@ fn build_ai_prompt(query: &str, local_answer: &ChatAnswer, portuguese: bool) -> 
         .enumerate()
         .map(|(index, item)| {
             format!(
-                "{} {}:\n- capture_id: {}\n- {}: {}\n- {}: {}\n- app: {}\n- application_id: {}\n- {}: {}\n- {}: {}\n- {}: {}\n- assets: {}",
+                "{} {}:\n- capture_id: {}\n- {}: {}\n- {}: {}\n- app: {}\n- application_id: {}\n- {}: {}\n- {}: {}\n- {}: {}",
                 if portuguese { "Evidência" } else { "Evidence" },
                 index + 1,
                 item.capture_id,
@@ -4544,8 +4660,7 @@ fn build_ai_prompt(query: &str, local_answer: &ChatAnswer, portuguese: bool) -> 
                 if portuguese { "campos_encontrados" } else { "matched_fields" },
                 item.matched_fields.join(", "),
                 if portuguese { "trecho" } else { "excerpt" },
-                item.excerpt,
-                item.asset_paths.join(", ")
+                item.excerpt
             )
         })
         .collect::<Vec<_>>()
@@ -4583,119 +4698,39 @@ fn import_file_capture(
     state: AppState,
     source_path: &Path,
 ) -> Result<CaptureDto, String> {
-    if !source_path.is_file() {
+    if !source_path.exists() {
         return Err(format!(
-            "O arquivo selecionado nao existe: {}",
+            "The selected path does not exist: {}",
             source_path.display()
         ));
     }
-
-    let extension = source_path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    let text_extensions = [
-        "txt", "md", "markdown", "log", "csv", "json", "xml", "yaml", "yml", "toml", "rs", "ts",
-        "tsx", "js", "jsx", "html", "css", "scss", "sql", "py", "java", "cs", "cpp", "c", "h",
-        "ini", "conf",
-    ];
-    let image_extensions = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "tif", "tiff"];
-    let is_image = image_extensions.contains(&extension.as_str());
-    if !is_image && !text_extensions.contains(&extension.as_str()) {
-        return Err("O ScryPuppy aceita imagens e arquivos de texto neste menu.".into());
-    }
-
-    let bytes = fs::read(source_path).map_err(err)?;
-    if bytes.len() > 20 * 1024 * 1024 {
-        return Err("O arquivo selecionado excede o limite de 20 MB.".into());
-    }
-
-    let file_name = source_path
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or("arquivo");
-    let content_text = if is_image {
-        String::new()
-    } else {
-        String::from_utf8(bytes.clone())
-            .map_err(|_| "O arquivo de texto precisa estar codificado em UTF-8.".to_string())?
+    let source_path = source_path.to_path_buf();
+    let active_window = ActiveWindowMetadata {
+        title: source_path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .map(str::to_string),
+        process_path: None,
+        app_name: Some("Windows Explorer".into()),
+        window_id: None,
+        process_id: None,
+        position: None,
+        error: None,
     };
-    if content_text.trim().is_empty() {
-        return Err("O arquivo selecionado esta vazio.".into());
-    }
-
-    let mut conn = open_conn(&state)?;
-    let capture_id = Uuid::new_v4().to_string();
-    let captured_at = now();
-    let hash = sha256_hex(&bytes);
-    let source_path_text = source_path.display().to_string();
-    let metadata = json!({
-        "imported_from_explorer": true,
-        "capture_origin": CaptureOrigin::FileImport,
-        "original_path": source_path_text,
-        "file_name": file_name,
-        "extension": extension,
-        "size_bytes": bytes.len(),
-    });
-
-    let transaction = conn.transaction().map_err(err)?;
-    transaction.execute(
-        "INSERT INTO captures (
-            id, context_id, content_text, content_hash, captured_at,
-            source_app_name, source_app_id, source_process_id, source_process_path,
-            window_title, window_id, platform, metadata_json, capture_kind, created_at
-         ) VALUES (?, ?, ?, ?, ?, 'Windows Explorer', ?, NULL, NULL, ?, NULL, ?, ?, 'reference', ?)",
-        params![
-            capture_id,
-            CONTENT_BASE_CONTEXT_ID,
-            content_text,
-            hash,
-            captured_at,
-            source_path_text,
-            file_name,
-            std::env::consts::OS,
-            metadata.to_string(),
-            captured_at,
-        ],
-    )
-    .map_err(err)?;
-
-    if is_image {
-        fs::create_dir_all(state.imported_images_dir()).map_err(err)?;
-        let target_path = state
-            .imported_images_dir()
-            .join(format!("{capture_id}.{extension}"));
-        fs::copy(source_path, &target_path).map_err(err)?;
-        transaction
-            .execute(
-                "INSERT INTO capture_assets (id, capture_id, kind, path, status, error, created_at)
-             VALUES (?, ?, 'imported_image', ?, 'saved', NULL, ?)",
-                params![
-                    Uuid::new_v4().to_string(),
-                    capture_id,
-                    target_path.display().to_string(),
-                    captured_at,
-                ],
-            )
-            .map_err(err)?;
-    }
-
-    process_local_analysis(&transaction, &capture_id)?;
-    enqueue_ocr_job(&transaction, &capture_id)?;
-    transaction.commit().map_err(err)?;
-    kick_ocr_worker(app.clone(), state.clone());
-    sync_contexts_best_effort(&state, &[CONTENT_BASE_CONTEXT_ID.to_string()]);
-
-    let capture = get_capture_by_id(&conn, &capture_id)?;
-    let _ = app.emit(
-        "capture-created",
-        CaptureCreatedEvent {
-            capture: capture.clone(),
-            origin: CaptureOrigin::FileImport,
+    persist_clipboard_payload(
+        app,
+        state,
+        ClipboardSnapshot {
+            representations: vec![ClipboardRepresentation::Files(vec![
+                ClipboardFile::physical(source_path),
+            ])],
+            formats: Vec::new(),
         },
-    );
-    Ok(capture)
+        active_window,
+        CaptureOrigin::FileImport,
+        "capture",
+        INBOX_CONTEXT_ID,
+    )
 }
 
 fn import_path_from_args(args: &[String]) -> Option<PathBuf> {
@@ -4728,42 +4763,13 @@ fn register_windows_context_menu() -> Result<(), String> {
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
     let classes = hkcu.create_subkey("Software\\Classes").map_err(err)?.0;
     let icon = executable.display().to_string();
-    let associations = [
-        "image",
-        ".txt",
-        ".md",
-        ".markdown",
-        ".log",
-        ".csv",
-        ".json",
-        ".xml",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".rs",
-        ".ts",
-        ".tsx",
-        ".js",
-        ".jsx",
-        ".html",
-        ".css",
-        ".scss",
-        ".sql",
-        ".py",
-        ".java",
-        ".cs",
-        ".cpp",
-        ".c",
-        ".h",
-        ".ini",
-        ".conf",
-    ];
+    let associations = ["*", "Directory"];
 
     for association in associations {
         let key_path = format!("SystemFileAssociations\\{association}\\shell\\Scryppy");
         let shell_key = classes.create_subkey(&key_path).map_err(err)?.0;
         shell_key
-            .set_value("", &"Copiar com ScryPuppy")
+            .set_value("", &"Save with ScryPuppy")
             .map_err(err)?;
         shell_key.set_value("Icon", &icon).map_err(err)?;
         let command_key = shell_key.create_subkey("command").map_err(err)?.0;
@@ -4981,6 +4987,54 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             error TEXT,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS capture_representations (
+            id TEXT PRIMARY KEY,
+            capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            format_name TEXT NOT NULL,
+            mime_type TEXT,
+            text_content TEXT,
+            asset_path TEXT,
+            size_bytes INTEGER,
+            sha256 TEXT,
+            restorable INTEGER NOT NULL DEFAULT 1,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(capture_id, ordinal)
+        );
+
+        CREATE TABLE IF NOT EXISTS capture_file_entries (
+            id TEXT PRIMARY KEY,
+            capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+            representation_id TEXT NOT NULL REFERENCES capture_representations(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            display_name TEXT NOT NULL,
+            original_path TEXT,
+            local_path TEXT,
+            entry_kind TEXT NOT NULL,
+            extension TEXT,
+            size_bytes INTEGER,
+            sha256 TEXT,
+            availability TEXT NOT NULL,
+            metadata_json TEXT NOT NULL DEFAULT '{}',
+            created_at TEXT NOT NULL,
+            UNIQUE(representation_id, ordinal)
+        );
+
+        CREATE TABLE IF NOT EXISTS capture_clipboard_formats (
+            capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
+            format_id INTEGER NOT NULL,
+            format_name TEXT NOT NULL,
+            supported INTEGER NOT NULL,
+            PRIMARY KEY(capture_id, format_id)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_capture_representations_capture
+            ON capture_representations(capture_id, ordinal);
+        CREATE INDEX IF NOT EXISTS idx_capture_file_entries_capture
+            ON capture_file_entries(capture_id, ordinal);
 
         CREATE TABLE IF NOT EXISTS capture_tags (
             capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
@@ -5247,8 +5301,12 @@ fn capture_base_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CaptureDto
         window_id: row.get(8)?,
         platform: row.get(9)?,
         kind: row.get(11)?,
+        content_kind: "unknown".into(),
         metadata: serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({})),
         assets: Vec::new(),
+        representations: Vec::new(),
+        files: Vec::new(),
+        clipboard_formats: Vec::new(),
         tags: Vec::new(),
         entities: Vec::new(),
         ocr: None,
@@ -5305,6 +5363,137 @@ fn hydrate_captures(conn: &Connection, captures: &mut [CaptureDto]) -> Result<()
         if let Some(index) = indexes.get(&capture_id) {
             captures[*index].assets.push(asset);
         }
+    }
+
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT capture_id, id, kind, format_name, mime_type, text_content,
+                    asset_path, size_bytes, sha256, restorable, metadata_json
+             FROM capture_representations
+             WHERE capture_id IN ({placeholders}) ORDER BY capture_id, ordinal"
+        ))
+        .map_err(err)?;
+    let rows = stmt
+        .query_map(&args[..], |row| {
+            let metadata_json: String = row.get(10)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                CaptureRepresentationDto {
+                    id: row.get(1)?,
+                    kind: row.get(2)?,
+                    format_name: row.get(3)?,
+                    mime_type: row.get(4)?,
+                    text_content: row.get(5)?,
+                    asset_path: row.get(6)?,
+                    size_bytes: row.get(7)?,
+                    sha256: row.get(8)?,
+                    restorable: row.get::<_, i64>(9)? != 0,
+                    metadata: serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({})),
+                },
+            ))
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    drop(stmt);
+    for (capture_id, representation) in rows {
+        if let Some(index) = indexes.get(&capture_id) {
+            captures[*index].representations.push(representation);
+        }
+    }
+
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT capture_id, id, representation_id, ordinal, display_name, original_path,
+                    local_path, entry_kind, extension, size_bytes, sha256, availability,
+                    metadata_json
+             FROM capture_file_entries
+             WHERE capture_id IN ({placeholders}) ORDER BY capture_id, ordinal"
+        ))
+        .map_err(err)?;
+    let rows = stmt
+        .query_map(&args[..], |row| {
+            let metadata_json: String = row.get(12)?;
+            Ok((
+                row.get::<_, String>(0)?,
+                CaptureFileDto {
+                    id: row.get(1)?,
+                    representation_id: row.get(2)?,
+                    ordinal: row.get(3)?,
+                    display_name: row.get(4)?,
+                    original_path: row.get(5)?,
+                    local_path: row.get(6)?,
+                    entry_kind: row.get(7)?,
+                    extension: row.get(8)?,
+                    size_bytes: row.get(9)?,
+                    sha256: row.get(10)?,
+                    availability: row.get(11)?,
+                    metadata: serde_json::from_str(&metadata_json).unwrap_or_else(|_| json!({})),
+                },
+            ))
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    drop(stmt);
+    for (capture_id, file) in rows {
+        if let Some(index) = indexes.get(&capture_id) {
+            let mut file = file;
+            if matches!(file.availability.as_str(), "available" | "missing") {
+                if let Some(path) = file.local_path.as_deref().or(file.original_path.as_deref()) {
+                    let path = Path::new(path);
+                    if !clipboard::is_network_path(path) {
+                        file.availability = if path.exists() {
+                            "available".into()
+                        } else {
+                            "missing".into()
+                        };
+                    }
+                }
+            }
+            captures[*index].files.push(file);
+        }
+    }
+
+    let mut stmt = conn
+        .prepare(&format!(
+            "SELECT capture_id, format_id, format_name, supported
+             FROM capture_clipboard_formats
+             WHERE capture_id IN ({placeholders}) ORDER BY capture_id, format_id"
+        ))
+        .map_err(err)?;
+    let rows = stmt
+        .query_map(&args[..], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                CaptureClipboardFormatDto {
+                    id: row.get(1)?,
+                    name: row.get(2)?,
+                    supported: row.get::<_, i64>(3)? != 0,
+                },
+            ))
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    drop(stmt);
+    for (capture_id, format) in rows {
+        if let Some(index) = indexes.get(&capture_id) {
+            captures[*index].clipboard_formats.push(format);
+        }
+    }
+
+    for capture in captures.iter_mut() {
+        capture.content_kind = ["files", "image", "html", "rich_text", "url", "plain_text"]
+            .into_iter()
+            .find(|kind| {
+                capture
+                    .representations
+                    .iter()
+                    .any(|item| item.kind == *kind)
+            })
+            .unwrap_or("unknown")
+            .to_string();
     }
 
     let mut stmt = conn
@@ -5930,7 +6119,7 @@ fn call_ai_for_context_suggestions(
     settings: &SettingsDto,
     captures: &[CaptureDto],
 ) -> Result<String, String> {
-    let rows = captures.iter().filter(|capture| capture.kind != "image").map(|capture| json!({
+    let rows = captures.iter().filter(|capture| capture.content_kind != "image").map(|capture| json!({
         "id": capture.id,
         "kind": capture.kind,
         "app": capture.source_app_name.as_deref().map(redact_sensitive_values),
@@ -6158,58 +6347,62 @@ fn release_hotkey_modifiers(enigo: &mut Enigo) -> Result<(), String> {
     Ok(())
 }
 
-fn read_clipboard_text() -> Result<String, arboard::Error> {
-    Clipboard::new().and_then(|mut clipboard| clipboard.get_text())
-}
-
-fn write_clipboard_text(state: &AppState, text: &str) -> Result<(), arboard::Error> {
-    let result = Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text.to_string()));
+fn write_clipboard_text(state: &AppState, text: &str) -> Result<(), String> {
+    let result = state.clipboard.write(ClipboardSnapshot::text(text));
     if result.is_ok() {
         mark_current_clipboard_sequence(state);
     }
     result
 }
 
-fn write_clipboard_image(
-    state: &AppState,
-    image: &ImageData<'static>,
-) -> Result<(), arboard::Error> {
-    let result = Clipboard::new().and_then(|mut clipboard| {
-        clipboard.set_image(ImageData {
-            width: image.width,
-            height: image.height,
-            bytes: image.bytes.clone(),
-        })
-    });
-    if result.is_ok() {
-        mark_current_clipboard_sequence(state);
-    }
-    result
-}
-
-fn write_clipboard_payload(
-    state: &AppState,
-    payload: &ClipboardPayload,
-) -> Result<(), arboard::Error> {
-    match payload {
-        ClipboardPayload::Text(text) => write_clipboard_text(state, text),
-        ClipboardPayload::Image(image) => write_clipboard_image(state, image),
-    }
-}
-
-fn read_clipboard_image() -> Result<ImageData<'static>, arboard::Error> {
-    Clipboard::new().and_then(|mut clipboard| clipboard.get_image())
-}
-
-fn read_clipboard_payload() -> Result<Option<ClipboardPayload>, String> {
-    for _ in 0..6 {
-        if let Ok(text) = read_clipboard_text() {
-            if !text.trim().is_empty() {
-                return Ok(Some(ClipboardPayload::Text(text)));
+fn cleanup_clipboard_vault(state: &AppState) -> Result<(), String> {
+    let root = state.clipboard_files_dir();
+    fs::create_dir_all(&root).map_err(err)?;
+    let conn = open_conn(state)?;
+    let mut statement = conn.prepare("SELECT id FROM captures").map_err(err)?;
+    let valid_ids = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(err)?
+        .collect::<Result<HashSet<_>, _>>()
+        .map_err(err)?;
+    for entry in fs::read_dir(&root).map_err(err)? {
+        let path = entry.map_err(err)?.path();
+        if !path.is_dir() {
+            if path.extension().and_then(|value| value.to_str()) == Some("part") {
+                let _ = secure_remove_file(&path);
+            }
+            continue;
+        }
+        let capture_id = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_default();
+        if !valid_ids.contains(capture_id) {
+            let _ = secure_remove_dir(&path);
+            continue;
+        }
+        for child in fs::read_dir(&path).map_err(err)? {
+            let child = child.map_err(err)?.path();
+            if child.extension().and_then(|value| value.to_str()) == Some("part") {
+                let _ = secure_remove_file(&child);
             }
         }
-        if let Ok(image) = read_clipboard_image() {
-            return Ok(Some(ClipboardPayload::Image(image)));
+    }
+    Ok(())
+}
+
+fn write_clipboard_payload(state: &AppState, payload: &ClipboardPayload) -> Result<(), String> {
+    let result = state.clipboard.write(payload.clone());
+    if result.is_ok() {
+        mark_current_clipboard_sequence(state);
+    }
+    result
+}
+
+fn read_clipboard_payload(state: &AppState) -> Result<Option<ClipboardPayload>, String> {
+    for _ in 0..6 {
+        if let Some(payload) = state.clipboard.read()? {
+            return Ok(Some(payload));
         }
         thread::sleep(Duration::from_millis(50));
     }
@@ -6220,19 +6413,14 @@ fn is_internal_clipboard_marker(text: &str) -> bool {
     text.starts_with("__CLIPSCRY_COPY_MARKER_")
 }
 
-fn read_clipboard_after_copy(marker: &str) -> Result<ClipboardPayload, String> {
+fn read_clipboard_after_copy(state: &AppState, marker: &str) -> Result<ClipboardPayload, String> {
     for _ in 0..6 {
         thread::sleep(Duration::from_millis(50));
-        match read_clipboard_text() {
-            Ok(text) if text != marker && !text.trim().is_empty() => {
-                return Ok(ClipboardPayload::Text(text));
+        if let Some(payload) = state.clipboard.read()? {
+            if payload.plain_text() == Some(marker) && payload.representations.len() == 1 {
+                continue;
             }
-            Ok(_) => {}
-            Err(_) => {
-                if let Ok(image) = read_clipboard_image() {
-                    return Ok(ClipboardPayload::Image(image));
-                }
-            }
+            return Ok(payload);
         }
     }
 
@@ -6312,6 +6500,232 @@ fn insert_clipboard_image_asset(
         params![asset_id, capture_id, path.display().to_string(), created_at],
     )
     .map_err(err)?;
+    Ok(())
+}
+
+fn persist_clipboard_representations(
+    conn: &Connection,
+    state: &AppState,
+    capture_id: &str,
+    snapshot: &ClipboardSnapshot,
+    created_at: &str,
+) -> Result<(), String> {
+    for format in &snapshot.formats {
+        conn.execute(
+            "INSERT INTO capture_clipboard_formats
+                (capture_id, format_id, format_name, supported) VALUES (?, ?, ?, ?)",
+            params![
+                capture_id,
+                format.id as i64,
+                format.name,
+                format.supported as i64
+            ],
+        )
+        .map_err(err)?;
+    }
+
+    for (ordinal, representation) in snapshot.representations.iter().enumerate() {
+        let representation_id = Uuid::new_v4().to_string();
+        let (
+            kind,
+            format_name,
+            mime_type,
+            text_content,
+            asset_path,
+            size_bytes,
+            hash,
+            restorable,
+            metadata,
+        ) = match representation {
+            ClipboardRepresentation::PlainText(value) => (
+                "plain_text",
+                "CF_UNICODETEXT",
+                Some("text/plain"),
+                Some(value.clone()),
+                None,
+                Some(value.len() as i64),
+                Some(sha256_hex(value.as_bytes())),
+                true,
+                json!({}),
+            ),
+            ClipboardRepresentation::Html(value) => (
+                "html",
+                "HTML Format",
+                Some("text/html"),
+                Some(value.clone()),
+                None,
+                Some(value.len() as i64),
+                Some(sha256_hex(value.as_bytes())),
+                true,
+                json!({ "sanitization": "required_before_render" }),
+            ),
+            ClipboardRepresentation::RichText(value) => (
+                "rich_text",
+                "Rich Text Format",
+                Some("text/rtf"),
+                Some(value.clone()),
+                None,
+                Some(value.len() as i64),
+                Some(sha256_hex(value.as_bytes())),
+                true,
+                json!({}),
+            ),
+            ClipboardRepresentation::Url(value) => (
+                "url",
+                "UniformResourceLocatorW",
+                Some("text/uri-list"),
+                Some(value.clone()),
+                None,
+                Some(value.len() as i64),
+                Some(sha256_hex(value.as_bytes())),
+                true,
+                json!({}),
+            ),
+            ClipboardRepresentation::Image(image) => {
+                let path = state
+                    .clipboard_images_dir()
+                    .join(format!("{capture_id}.png"));
+                (
+                    "image",
+                    "CF_DIBV5",
+                    Some("image/png"),
+                    None,
+                    Some(path.display().to_string()),
+                    Some(image.rgba.len() as i64),
+                    Some(sha256_hex(&image.rgba)),
+                    true,
+                    json!({ "width": image.width, "height": image.height }),
+                )
+            }
+            ClipboardRepresentation::Files(files) => (
+                "files",
+                if files.iter().any(|file| file.bytes.is_some()) {
+                    "FileGroupDescriptorW"
+                } else {
+                    "CF_HDROP"
+                },
+                Some("application/x-scrypuppy-file-list"),
+                None,
+                None,
+                Some(
+                    files
+                        .iter()
+                        .filter_map(|file| file.size_bytes)
+                        .fold(0u64, u64::saturating_add)
+                        .min(i64::MAX as u64) as i64,
+                ),
+                None,
+                files.iter().any(|file| {
+                    file.original_path.is_some()
+                        || file.bytes.is_some()
+                        || file.kind == ClipboardFileKind::Directory
+                }),
+                json!({ "item_count": files.len() }),
+            ),
+        };
+        conn.execute(
+            "INSERT INTO capture_representations
+                (id, capture_id, ordinal, kind, format_name, mime_type, text_content,
+                 asset_path, size_bytes, sha256, restorable, metadata_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                representation_id,
+                capture_id,
+                ordinal as i64,
+                kind,
+                format_name,
+                mime_type,
+                text_content,
+                asset_path,
+                size_bytes,
+                hash,
+                restorable as i64,
+                metadata.to_string(),
+                created_at,
+            ],
+        )
+        .map_err(err)?;
+
+        if let ClipboardRepresentation::Files(files) = representation {
+            persist_file_entries(
+                conn,
+                state,
+                capture_id,
+                &representation_id,
+                files,
+                created_at,
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn persist_file_entries(
+    conn: &Connection,
+    state: &AppState,
+    capture_id: &str,
+    representation_id: &str,
+    files: &[ClipboardFile],
+    created_at: &str,
+) -> Result<(), String> {
+    let root = state.clipboard_files_dir().join(capture_id);
+    for (ordinal, file) in files.iter().enumerate() {
+        let mut local_path = None;
+        let mut availability = file.availability.clone();
+        let mut hash = None;
+        if file.original_path.is_none() {
+            let path = root.join(format!(
+                "{:04}-{}",
+                ordinal,
+                clipboard::sanitize_file_name(&file.display_name)
+            ));
+            if file.kind == ClipboardFileKind::Directory {
+                fs::create_dir_all(&path).map_err(err)?;
+                local_path = Some(path.display().to_string());
+                availability = ClipboardFileAvailability::Available;
+            } else if let Some(bytes) = &file.bytes {
+                fs::create_dir_all(&root).map_err(err)?;
+                let temporary = root.join(format!(".{}.{}.part", ordinal, Uuid::new_v4()));
+                let mut output = File::create(&temporary).map_err(err)?;
+                output.write_all(bytes).map_err(err)?;
+                output.sync_all().map_err(err)?;
+                fs::rename(&temporary, &path).map_err(err)?;
+                local_path = Some(path.display().to_string());
+                availability = ClipboardFileAvailability::Available;
+                hash = Some(sha256_hex(bytes));
+            }
+        }
+        let extension = Path::new(&file.display_name)
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase());
+        conn.execute(
+            "INSERT INTO capture_file_entries
+                (id, capture_id, representation_id, ordinal, display_name, original_path,
+                 local_path, entry_kind, extension, size_bytes, sha256, availability,
+                 metadata_json, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?)",
+            params![
+                Uuid::new_v4().to_string(),
+                capture_id,
+                representation_id,
+                ordinal as i64,
+                file.display_name,
+                file.original_path
+                    .as_ref()
+                    .map(|path| path.display().to_string()),
+                local_path,
+                file.kind.as_str(),
+                extension,
+                file.size_bytes
+                    .map(|value| value.min(i64::MAX as u64) as i64),
+                hash,
+                availability.as_str(),
+                created_at,
+            ],
+        )
+        .map_err(err)?;
+    }
     Ok(())
 }
 
@@ -6820,12 +7234,9 @@ fn normalized_context_name(name: &str) -> Result<String, String> {
     Ok(name)
 }
 
+#[cfg(test)]
 fn content_hash(text: &str) -> String {
     sha256_hex(text.as_bytes())
-}
-
-fn image_content_hash(image: &ImageData<'static>) -> String {
-    image_sha256_hex(image.width, image.height, image.bytes.as_ref())
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -6884,6 +7295,7 @@ pub fn run() {
             .map_err(io_other)?;
             let context_key =
                 get_or_create_secret(CONTEXT_KEY_CREDENTIAL, true).map_err(io_other)?;
+            let clipboard = Arc::new(ClipboardService::start().map_err(io_other)?);
             let monitor_handle = ClipboardMonitorHandle::new();
             let state = AppState {
                 app_dir,
@@ -6891,11 +7303,13 @@ pub fn run() {
                 context_key,
                 capture_gate: Arc::new(Mutex::new(CaptureGate { in_progress: false })),
                 ignored_clipboard_sequences: Arc::new(Mutex::new(SequenceSuppression::default())),
+                clipboard,
                 clipboard_monitor: monitor_handle.clone(),
                 ocr_worker_running: Arc::new(Mutex::new(false)),
                 paste_target_window: Arc::new(Mutex::new(None)),
             };
             initialize_database(&state).map_err(io_other)?;
+            cleanup_clipboard_vault(&state).map_err(io_other)?;
             app.manage(state.clone());
 
             #[cfg(target_os = "windows")]
@@ -7062,7 +7476,9 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app_handle, event| {
             if matches!(event, tauri::RunEvent::Exit) {
-                app_handle.state::<AppState>().clipboard_monitor.shutdown();
+                let state = app_handle.state::<AppState>();
+                state.clipboard_monitor.shutdown();
+                state.clipboard.shutdown();
             }
         });
 }
@@ -7522,6 +7938,39 @@ mod tests {
         );
     }
 
+    #[test]
+    fn multi_format_capture_schema_round_trips_representations_and_files() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        migrate(&conn).expect("schema migration");
+        let captured_at = now();
+        conn.execute(
+            "INSERT INTO captures (
+                id, context_id, content_text, content_hash, captured_at, platform,
+                metadata_json, capture_kind, created_at
+             ) VALUES ('multi', 'inbox', 'fallback', 'hash', ?, 'windows', '{}', 'capture', ?)",
+            params![captured_at, captured_at],
+        )
+        .expect("base capture");
+        let state = test_state();
+        let snapshot = ClipboardSnapshot {
+            representations: vec![
+                ClipboardRepresentation::Html("<strong>fallback</strong>".into()),
+                ClipboardRepresentation::PlainText("fallback".into()),
+                ClipboardRepresentation::Files(vec![ClipboardFile::physical(PathBuf::from(
+                    r"C:\missing\report.pdf",
+                ))]),
+            ],
+            formats: Vec::new(),
+        };
+        persist_clipboard_representations(&conn, &state, "multi", &snapshot, &captured_at)
+            .expect("representations persist");
+        let capture = get_capture_by_id(&conn, "multi").expect("capture hydration");
+        assert_eq!(capture.content_kind, "files");
+        assert_eq!(capture.representations.len(), 3);
+        assert_eq!(capture.files.len(), 1);
+        assert_eq!(capture.files[0].availability, "missing");
+    }
+
     fn test_state() -> AppState {
         AppState {
             app_dir: PathBuf::from("test-data"),
@@ -7529,6 +7978,7 @@ mod tests {
             context_key: String::new(),
             capture_gate: Arc::new(Mutex::new(CaptureGate { in_progress: false })),
             ignored_clipboard_sequences: Arc::new(Mutex::new(SequenceSuppression::default())),
+            clipboard: Arc::new(ClipboardService::start().expect("test clipboard service")),
             clipboard_monitor: ClipboardMonitorHandle::new(),
             ocr_worker_running: Arc::new(Mutex::new(false)),
             paste_target_window: Arc::new(Mutex::new(None)),

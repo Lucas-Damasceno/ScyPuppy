@@ -33,6 +33,9 @@ export function CaptureDetailsDialog({
     () => contexts.filter((context) => !capture.contexts.some((assigned) => assigned.id === context.id)),
     [capture.contexts, contexts],
   );
+  const clipboardFormats = capture.clipboard_formats.length > 0
+    ? capture.clipboard_formats.map((format) => ({ key: String(format.id), name: format.name, supported: format.supported }))
+    : capture.representations.map((representation) => ({ key: representation.id, name: representation.format_name, supported: representation.restorable }));
 
   async function toggleContext(context: Context, assigned: boolean) {
     try {
@@ -77,10 +80,28 @@ export function CaptureDetailsDialog({
         </header>
 
         <div className="lite-detail-scroll">
-          <section className="lite-detail-section">
+          {capture.files.length > 0 && <section className="lite-detail-section">
+            <div className="lite-section-heading"><h3>{tr("Captured files")}</h3><button onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => onError(formatAppError(error, tr)))}><LiteIcon name="copy" />{tr("Copy")}</button></div>
+            <div className="lite-file-list">
+              {capture.files.map((file) => <div className="lite-file-item" key={file.id}>
+                <span className="lite-file-icon"><LiteIcon name={file.entry_kind === "directory" ? "folder" : "file"} /></span>
+                <div><strong>{file.display_name}</strong><small>{fileTypeLabel(file.entry_kind, tr)}{file.size_bytes != null ? ` · ${formatBytes(file.size_bytes)}` : ""}</small></div>
+                <span className={`lite-file-status is-${file.availability}`}>{file.availability === "available" || file.availability === "unverified" ? tr("Available") : tr("Unavailable")}</span>
+              </div>)}
+            </div>
+          </section>}
+
+          {capture.content_text.trim() && <section className="lite-detail-section">
             <div className="lite-section-heading"><h3>{tr("Full text")}</h3><button onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => onError(formatAppError(error, tr)))}><LiteIcon name="copy" />{tr("Copy")}</button></div>
             <pre>{captureDisplayText(language, capture)}</pre>
-          </section>
+          </section>}
+
+          {clipboardFormats.length > 0 && <section className="lite-detail-section">
+            <h3>{tr("Clipboard formats")}</h3>
+            <div className="lite-format-list">
+              {clipboardFormats.map((format) => <span key={format.key}><LiteIcon name={format.supported ? "check" : "info"} size={12} />{format.name}</span>)}
+            </div>
+          </section>}
 
           {!readOnly && <section className="lite-detail-section">
             <h3>{tr("Contexts")}</h3>
@@ -125,6 +146,21 @@ export function CaptureDetailsDialog({
       {previewPath && <button className="lite-image-preview" onClick={() => setPreviewPath(null)} aria-label={tr("Close preview")}><img src={convertFileSrc(previewPath)} alt="" /></button>}
     </div>
   );
+}
+
+function fileTypeLabel(kind: string, tr: (value: string) => string) {
+  if (kind === "directory") return tr("Folder");
+  if (kind === "application") return tr("Application file");
+  if (kind === "shortcut") return tr("Shortcut");
+  if (kind === "virtual_file") return tr("Virtual file");
+  return tr("File");
+}
+
+function formatBytes(value: number) {
+  if (value < 1_024) return `${value} B`;
+  if (value < 1_048_576) return `${(value / 1_024).toFixed(1)} KB`;
+  if (value < 1_073_741_824) return `${(value / 1_048_576).toFixed(1)} MB`;
+  return `${(value / 1_073_741_824).toFixed(1)} GB`;
 }
 
 function Metadata({ label, value }: { label: string; value: string | null }) {

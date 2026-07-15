@@ -22,10 +22,10 @@ The release version must match in:
 - `src-tauri/Cargo.lock`
 - `src-tauri/tauri.conf.json`
 
-The current beta version is `1.0.0-beta.4`, which produces:
+The current beta version is `1.0.0-beta.5`, which produces:
 
 ```text
-ScryPuppy_1.0.0-beta.4_x64-setup.exe
+ScryPuppy_1.0.0-beta.5_x64-setup.exe
 ```
 
 ## What the script does

@@ -16,9 +16,19 @@ import { appInitial, compactContent, formatHotkey, formatRelativeDate } from "./
 import { LiteEmpty } from "./LiteEmpty";
 import { LiteDocumentsWorkspace } from "./LiteDocumentsWorkspace";
 import { LiteIcon } from "./LiteIcon";
+import type { LiteIconName } from "./LiteIcon";
 import { LiteSettingsDialog } from "./LiteSettingsDialog";
 
 const capturePageSize = 50;
+
+function captureTypeIcon(capture: Capture): LiteIconName | null {
+  if (capture.content_kind === "files") {
+    return capture.files.some((file) => file.entry_kind === "directory") ? "folder" : "file";
+  }
+  if (capture.content_kind === "url") return "globe";
+  if (capture.content_kind === "html" || capture.content_kind === "rich_text") return "layers";
+  return null;
+}
 
 export function LiteMainApp() {
   const docsPreview = import.meta.env.DEV
@@ -314,6 +324,7 @@ export function LiteMainApp() {
             const imageAsset = capture.assets.find((asset) =>
               asset.path && ["clipboard_image", "imported_image"].includes(asset.kind),
             );
+            const typeIcon = captureTypeIcon(capture);
             return <article className={`lite-capture-row ${imageAsset ? "has-image" : ""}`} key={capture.id}>
               {imageAsset?.path ? <button
                 className="lite-capture-thumbnail"
@@ -322,7 +333,9 @@ export function LiteMainApp() {
                 title={tr("View details")}
               >
                 <img src={convertFileSrc(imageAsset.path)} alt="" loading="lazy" />
-              </button> : <span className="lite-capture-app">{appInitial(capture.source_app_name)}</span>}
+              </button> : typeIcon
+                ? <span className="lite-capture-app lite-capture-type"><LiteIcon name={typeIcon} size={16} /></span>
+                : <span className="lite-capture-app">{appInitial(capture.source_app_name)}</span>}
               <div className="lite-capture-main">
                 <button className="lite-capture-content" onClick={() => api.copyCaptureToClipboard(capture.id).catch(reportError)} title={tr("Copy")}>
                   <strong>{compactContent(captureDisplayText(language, capture))}</strong>

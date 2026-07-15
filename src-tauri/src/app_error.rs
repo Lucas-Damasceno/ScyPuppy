@@ -72,6 +72,10 @@ impl AppError {
             "The focused app did not update the clipboard after the shortcut. Release the keys and try capturing again." => Some("clipboard.not_updated"),
             "O app focado nao atualizou o clipboard depois do atalho. Tente soltar as teclas e repetir a captura." => Some("clipboard.not_updated"),
             "Dados de imagem do clipboard invalidos." => Some("clipboard.invalid_image"),
+            "This capture has no restorable clipboard representation." => Some("clipboard.capture_unavailable"),
+            "No restorable file path is available." => Some("clipboard.files_unavailable"),
+            "The clipboard service is unavailable." => Some("clipboard.service_unavailable"),
+            "The clipboard did not respond in time." => Some("clipboard.timeout"),
             "Janela ativa nao encontrada para screenshot." => Some("screenshot.window_not_found"),
             "Janela ativa minimizada; screenshot nao capturado." => Some("screenshot.window_minimized"),
             "Captura nao encontrada." => Some("capture.not_found"),
@@ -86,6 +90,9 @@ impl AppError {
         }
 
         if let Some(path) = message.strip_prefix("O arquivo selecionado nao existe: ") {
+            return Self::new("file.not_found").with_param("path", path.to_string());
+        }
+        if let Some(path) = message.strip_prefix("The selected path does not exist: ") {
             return Self::new("file.not_found").with_param("path", path.to_string());
         }
         if let Some(provider) = message.strip_prefix("Provider nao suportado: ") {
