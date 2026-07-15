@@ -1,5 +1,5 @@
 export type LiteIconName =
-  | "arrow" | "check" | "close" | "copy" | "download" | "edit" | "eye" | "file" | "folder"
+  | "arrow" | "check" | "close" | "copy" | "edit" | "export" | "eye" | "file" | "folder"
   | "globe" | "info" | "layers" | "loader" | "lock" | "plus" | "refresh" | "search"
   | "settings" | "sparkles" | "trash";
 
@@ -8,8 +8,8 @@ const iconPaths: Record<LiteIconName, string[]> = {
   check: ["m5 12 4 4L19 6"],
   close: ["M18 6 6 18", "m6 6 12 12"],
   copy: ["M9 9h11v11H9z", "M4 15V4h11"],
-  download: ["M12 3v12", "m7-5 5 5 5-5", "M5 21h14"],
   edit: ["M4 20h4L19 9l-4-4L4 16z", "m13-13 4 4"],
+  export: ["M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z", "M14 2v6h6", "M12 12v6", "m9 15 3 3 3-3"],
   eye: ["M2.5 12s3.5-6 9.5-6 9.5 6-3.5 6-9.5 6-9.5-6-9.5-6Z", "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"],
   file: ["M6 3h8l4 4v14H6z", "M14 3v5h5", "M9 13h6", "M9 17h6"],
   folder: ["M3 6h7l2 2h9v11H3z"],

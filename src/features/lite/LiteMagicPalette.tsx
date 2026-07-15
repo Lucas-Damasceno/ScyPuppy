@@ -185,7 +185,9 @@ export function LiteMagicPalette() {
         <form className="lite-magic-form" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}>
           <LiteIcon name="search" />
           <input ref={inputRef} value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder={tr(mode === "document" ? "What subject should be condensed?" : "What are you looking for?")} aria-label={tr("Magic Search")} />
-          <button type="submit" disabled={!query.trim() || isLoading || (mode === "document" && preview?.evidence_count === 0)}><LiteIcon name="arrow" /></button>
+          <button type="submit" disabled={!query.trim() || isLoading || (mode === "document" && preview?.evidence_count === 0)} aria-label={tr("Ask ScryPuppy")}>
+            <LiteIcon name="sparkles" size={13} /><span>{tr("Ask")}</span>
+          </button>
         </form>
 
         {mode === "document" && <div className="lite-document-scope">

@@ -364,7 +364,9 @@
 .lite-search-row input:focus,
 .lite-search-row input:focus-visible,
 .lite-magic-form input:focus,
-.lite-magic-form input:focus-visible { outline: none; box-shadow: none; }
+.lite-magic-form input:focus-visible,
+.lite-context-picker-search input:focus,
+.lite-context-picker-search input:focus-visible { outline: none; box-shadow: none; }
 .lite-search-row button { display: grid; padding: 4px; border: 0; background: transparent; color: var(--lite-muted); cursor: pointer; }
 .lite-search-row .lite-search-submit { display: inline-flex; width: auto; min-width: 54px; height: var(--ui-control-height-compact); align-items: center; justify-content: center; gap: 5px; padding: 0 9px; border-radius: var(--ui-radius-compact); background: var(--lite-accent); color: #fff; font: inherit; font-size: 10px; font-weight: 720; }
 .lite-search-row .lite-search-submit:disabled { opacity: .38; }
@@ -480,6 +482,18 @@
 
 .lite-modal-surface > header { padding: 17px 20px; border-bottom: 1px solid var(--lite-border); }
 .lite-modal-surface > footer { padding: 14px 20px; border-top: 1px solid var(--lite-border); }
+
+.lite-confirm-modal { width: min(430px, calc(100vw - 32px)); }
+.lite-confirm-modal > header { display: grid; grid-template-columns: 42px minmax(0, 1fr); align-items: start; gap: 12px; }
+.lite-confirm-icon { display: grid; width: 42px; height: 42px; place-items: center; border-radius: var(--ui-radius-card); background: color-mix(in srgb, var(--lite-danger) 10%, var(--lite-panel)); color: var(--lite-danger); }
+.lite-confirm-modal h2 { margin: 4px 0 5px; font-size: 17px; letter-spacing: -.02em; }
+.lite-confirm-modal p { margin: 0; color: var(--lite-muted); font-size: 10px; line-height: 1.55; }
+.lite-confirm-modal > footer { display: flex; justify-content: flex-end; gap: 8px; }
+.lite-confirm-modal > footer button { display: inline-flex; min-height: var(--ui-control-height-default); align-items: center; justify-content: center; gap: 6px; padding: 0 12px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-control); background: var(--lite-panel); color: var(--lite-muted); font: inherit; font-size: 10px; font-weight: 680; cursor: pointer; }
+.lite-confirm-modal > footer button:hover { background: var(--lite-control); color: var(--lite-text); }
+.lite-confirm-modal > footer button:disabled { opacity: .55; cursor: default; }
+.lite-confirm-modal > footer .lite-confirm-danger { border-color: var(--lite-danger); background: var(--lite-danger); color: #fff; }
+.lite-confirm-modal > footer .lite-confirm-danger:hover { background: color-mix(in srgb, var(--lite-danger) 88%, #000); color: #fff; }
 
 .lite-detail-modal {
   display: flex;
@@ -636,6 +650,7 @@
 .lite-document-title-row h1 { min-width: 0; }
 .lite-document-title-row input { width: min(620px, 100%); margin: 3px 0 4px; padding: 5px 8px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-control); outline: 0; background: var(--lite-panel); color: var(--lite-text); font-family: inherit; font-size: clamp(21px, 2.5vw, 29px); font-weight: 700; line-height: 1.2; letter-spacing: -.035em; }
 .lite-document-title-row input:focus { border-color: var(--lite-focus-border); box-shadow: var(--lite-focus-ring); }
+.lite-document-title-row input:focus-visible { outline: none; }
 .lite-document-title-row .lite-icon-button { flex: 0 0 auto; }
 
 .lite-document-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 7px; }
@@ -688,6 +703,8 @@
 .lite-document-panel-search { display: grid; min-height: var(--ui-field-height-compact); grid-template-columns: 15px 1fr; align-items: center; gap: 5px; margin: 0 7px 8px; padding: 0 8px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-small); color: var(--lite-muted); }
 .lite-document-panel-search:focus-within { border-color: var(--lite-focus-border); box-shadow: var(--lite-focus-ring); }
 .lite-document-panel-search input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--lite-text); font: inherit; font-size: 9px; }
+.lite-document-panel-search input:focus,
+.lite-document-panel-search input:focus-visible { outline: none; box-shadow: none; }
 
 .lite-document-history-list,
 .lite-document-source-list { min-height: 0; overflow: auto; scrollbar-width: thin; }
@@ -751,10 +768,10 @@
 .lite-magic-panel > header strong { font-size: 13px; }
 .lite-magic-panel > header small { color: var(--lite-muted); font-size: 9px; }
 .lite-magic-modes { display: flex; gap: 4px; margin: 0 18px 9px; }
-.lite-magic-form { display: grid; grid-template-columns: 19px 1fr 34px; align-items: center; gap: 9px; margin: 0 18px; padding: 8px 8px 8px 13px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-search); background: var(--lite-panel); color: var(--lite-muted); box-shadow: 0 7px 20px var(--lite-shadow); }
+.lite-magic-form { display: grid; grid-template-columns: 19px 1fr auto; align-items: center; gap: 9px; margin: 0 18px; padding: 8px 8px 8px 13px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-search); background: var(--lite-panel); color: var(--lite-muted); box-shadow: 0 7px 20px var(--lite-shadow); }
 .lite-magic-form:focus-within { border-color: var(--lite-focus-border); box-shadow: var(--lite-focus-ring); }
 .lite-magic-form input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--lite-text); font: inherit; font-size: 13px; }
-.lite-magic-form > button { display: grid; width: var(--ui-icon-button-size); height: var(--ui-icon-button-size); place-items: center; border: 0; border-radius: var(--ui-radius-control); background: var(--lite-accent); color: #fff; cursor: pointer; }
+.lite-magic-form > button { display: inline-flex; width: auto; min-width: 58px; height: var(--ui-icon-button-size); align-items: center; justify-content: center; gap: 5px; padding: 0 10px; border: 0; border-radius: var(--ui-radius-control); background: var(--lite-accent); color: #fff; font: inherit; font-size: 10px; font-weight: 720; cursor: pointer; }
 .lite-magic-form > button:disabled { opacity: .38; cursor: default; }
 .lite-document-scope { display: grid; grid-template-columns: minmax(135px, .8fr) minmax(120px, .7fr) 1fr; align-items: end; gap: 8px; margin: 9px 18px 0; }
 .lite-document-scope label { display: grid; gap: 4px; color: var(--lite-muted); font-size: 8px; font-weight: 650; }

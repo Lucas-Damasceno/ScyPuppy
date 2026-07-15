@@ -17,7 +17,7 @@ Capture useful information, keep its source, organize it into Contexts, and turn
 </div>
 
 > [!NOTE]
-> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.1`.
+> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.2`.
 
 ![ScryPuppy main workspace](docs/screenshots/scrypuppy-main.png)
 
@@ -75,11 +75,13 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 
 ## Privacy model
 
-- Captures, Contexts, tags, entities, documents, images, and OCR stay on the device.
+- Captures, Contexts, tags, entities, generated documents, images, and OCR results are stored locally.
 - The SQLite database is encrypted with SQLCipher.
 - Database and AI credentials are stored in Windows Credential Manager.
 - AI is invoked only after an explicit user action.
 - Images and screenshots are never sent to AI providers.
+- Explicit AI requests may include bounded text evidence and relevant locally extracted OCR text. Recognized API keys and tokens are replaced with opaque placeholders before every provider request.
+- For generated documents, placeholders are restored only after the provider response returns, on the user's device. Local documents and exported Markdown files may therefore contain the original credentials and should be handled carefully.
 - Automatic screenshots and automatic Quick Context prompts remain separate opt-ins.
 
 > [!IMPORTANT]

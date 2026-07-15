@@ -56,7 +56,7 @@ export const generateMagicSearch = (request: MagicSearchRequest) => invoke<Magic
 export const previewMagicSearch = (request: MagicSearchRequest) => invoke<MagicSearchPreview>("preview_magic_search", { request });
 export const listMagicSearches = () => invoke<MagicSearchListItem[]>("list_magic_searches");
 export const getMagicSearch = (id: string) => invoke<MagicSearchDocument>("get_magic_search", { id });
-export const exportMagicSearch = (id: string) => invoke<string>("export_magic_search", { id });
+export const exportMagicSearch = (id: string, path?: string) => invoke<string>("export_magic_search", { id, path: path ?? null });
 export const updateMagicSearchMarkdown = (id: string, markdown: string) => invoke<MagicSearchDocument>("update_magic_search_markdown", { id, markdown });
 export const renameMagicSearch = (id: string, title: string) => invoke<MagicSearchDocument>("rename_magic_search", { id, title });
 export const deleteMagicSearch = (rootId: string) => invoke<void>("delete_magic_search", { rootId });

@@ -139,7 +139,7 @@ Users can create a Context, assign it from capture details, or add several exist
 
 The backend retains deterministic and optional AI-assisted organization for compatibility. Local analysis considers URLs, repositories, applications, window titles, paths, commands, hashes, UUIDs, tags, entities, existing Contexts, and temporal proximity. Suggestions are reviewable and never remove manual associations.
 
-Optional AI receives bounded text and metadata only. Images and screenshots are excluded, and local results remain available if a provider fails.
+Optional AI receives bounded text and metadata only. Images and screenshots are excluded, relevant OCR text is treated as text evidence, and local results remain available if a provider fails.
 
 ## Search and documents
 
@@ -148,7 +148,7 @@ Optional AI receives bounded text and metadata only. Images and screenshots are 
 - Quick-answer mode returns a focused result with its evidence.
 - Document mode creates editable, versioned Markdown with numbered sources.
 - Evidence snapshots remain durable so a document keeps its source trail.
-- Export is performed locally by Rust commands.
+- Export uses the native save dialog and is performed locally by a Rust command at the path explicitly chosen by the user.
 
 The Ask ScryPuppy webview remains alive while hidden. Contexts are refreshed on every `magic-search-opened` event, not only at React mount. Removed Context selections are reset before preview or generation.
 
@@ -168,6 +168,8 @@ All plugins and managed state required by startup commands are registered before
 - Clipboard content is not sent externally by default.
 - AI requires an explicit user action.
 - Images and screenshots are excluded from AI requests.
+- Recognized credentials in queries, capture text, metadata, entities, and OCR text are replaced before every provider call. Magic Search uses opaque placeholders backed by an in-memory map; document mode restores them only after the response returns locally. The map is never sent or persisted.
+- Evidence excerpts remain redacted. A generated or exported document can contain restored credentials, so it must be handled as sensitive local data.
 - Clipboard content and credentials must never be written to logs.
 - No analytics or telemetry are included.
 

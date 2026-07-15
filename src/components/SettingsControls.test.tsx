@@ -10,7 +10,7 @@ describe("shared settings controls", () => {
     render(<ClipboardCaptureControls settings={settingsFixture} tr={tr} onPatch={vi.fn(() => Promise.resolve())} />);
     expect(screen.getByLabelText("Monitor clipboard copies")).not.toBeChecked();
     expect(screen.getByLabelText("Screenshot automatic captures")).toBeDisabled();
-    expect(screen.getByLabelText("Quick Category automatic captures")).toBeDisabled();
+    expect(screen.getByLabelText("Quick Context automatic captures")).toBeDisabled();
   });
 
   it("enables automatic children without changing their stored values", () => {
@@ -25,7 +25,7 @@ describe("shared settings controls", () => {
   it("keeps automatic Quick Context disabled when the global toggle is off", () => {
     render(<QuickContextControls settings={{ ...settingsFixture, clipboard_monitor_enabled: true, quick_context_enabled: false }} tr={tr} onPatch={vi.fn(() => Promise.resolve())} />);
     render(<ClipboardCaptureControls settings={{ ...settingsFixture, clipboard_monitor_enabled: true, quick_context_enabled: false, clipboard_monitor_quick_context_enabled: true }} tr={tr} onPatch={vi.fn(() => Promise.resolve())} />);
-    expect(screen.getByLabelText("Quick Category automatic captures")).toBeDisabled();
+    expect(screen.getByLabelText("Quick Context automatic captures")).toBeDisabled();
   });
 
   it("only submits an API key after blur or Enter", () => {

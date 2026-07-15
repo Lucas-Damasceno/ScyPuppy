@@ -1274,10 +1274,18 @@ fn get_magic_search(state: State<AppState>, id: String) -> Result<MagicSearchDoc
 }
 
 #[tauri::command]
-fn export_magic_search(state: State<AppState>, id: String) -> Result<String, String> {
+fn export_magic_search(
+    state: State<AppState>,
+    id: String,
+    path: Option<String>,
+) -> Result<String, String> {
     let conn = open_conn(&state)?;
     let document = get_magic_search_document(&conn, &id)?;
-    export_markdown(&state, "magic-search", &document.title, &document.markdown)
+    if let Some(path) = path {
+        export_markdown_to_path(&path, &document.markdown)
+    } else {
+        export_markdown(&state, "magic-search", &document.title, &document.markdown)
+    }
 }
 
 #[tauri::command]
@@ -2833,7 +2841,7 @@ fn evidence_from_scored(item: &ScoredCapture) -> EvidenceItem {
         app_name: item.capture.source_app_name.clone(),
         application_id: item.capture.source_app_id.clone(),
         window_title: item.capture.window_title.clone(),
-        excerpt: excerpt_for_query(&item.capture.content_text),
+        excerpt: excerpt_for_query(&redact_sensitive_values(&item.capture.content_text)),
         matched_fields: item.matched_fields.clone(),
         asset_paths: item
             .capture
@@ -2861,6 +2869,34 @@ fn query_terms(query: &str) -> Vec<String> {
         .filter(|term| !CHAT_STOP_WORDS.contains(term))
         .map(ToString::to_string)
         .collect()
+}
+
+fn is_broad_collection_query(query: &str) -> bool {
+    const SCOPE_TERMS: &str = "all everything entire whole tudo todo todos todas inteiro inteira";
+    const NON_SUBJECT_TERMS: &str = concat!(
+        "a an and about capture captures clipboard condense context contexts copied create data ",
+        "document documents file files find from get i in include information items library list ",
+        "make memory me my notes of on organise organize our search show summarise summarize the to use ",
+        "arquivo arquivos as biblioteca buscar busque captura capturas condensar contexto contextos ",
+        "copiado copiada copiados copiadas copiei criar crie da das dados de do documento documentos ",
+        "dos e em encontrar encontre eu gerar gere informacao informação informacoes informações incluir ",
+        "inclua itens listar liste memoria memória meu meus minha minhas mostrar mostre na nas no nos nota ",
+        "notas o organizar os para procurar procure que resumir resuma sobre um uma usar"
+    );
+
+    let normalized = normalize_text(query);
+    let terms = normalized
+        .split(|character: char| !character.is_alphanumeric())
+        .filter(|term| !term.is_empty())
+        .collect::<Vec<_>>();
+    let contains_term =
+        |terms: &str, candidate: &str| terms.split_ascii_whitespace().any(|term| term == candidate);
+    let has_scope_term = terms.iter().any(|term| contains_term(SCOPE_TERMS, term));
+
+    has_scope_term
+        && terms
+            .iter()
+            .all(|term| contains_term(SCOPE_TERMS, term) || contains_term(NON_SUBJECT_TERMS, term))
 }
 
 const CHAT_STOP_WORDS: &[&str] = &[
@@ -3217,17 +3253,27 @@ fn extract_sensitive_value(text: &str) -> Option<String> {
         .map(|value| value.as_str().to_string())
 }
 
+fn capture_sensitive_value(capture: &CaptureDto) -> Option<String> {
+    extract_sensitive_value(&capture.content_text).or_else(|| {
+        capture
+            .ocr
+            .as_ref()
+            .and_then(|ocr| ocr.text.as_deref())
+            .and_then(extract_sensitive_value)
+    })
+}
+
 fn mask_secret(value: &str) -> String {
     let characters = value.chars().collect::<Vec<_>>();
     if characters.len() <= 8 {
-        return "••••••••".to_string();
+        return "********".to_string();
     }
     let prefix = characters.iter().take(7).collect::<String>();
     let suffix = characters
         .iter()
         .skip(characters.len() - 4)
         .collect::<String>();
-    format!("{prefix}••••••••{suffix}")
+    format!("{prefix}********{suffix}")
 }
 
 fn redact_sensitive_values(text: &str) -> String {
@@ -3236,6 +3282,92 @@ fn redact_sensitive_values(text: &str) -> String {
             mask_secret(&captures[0])
         })
         .into_owned()
+}
+
+#[derive(Debug, Default)]
+struct SecretRedactionMap {
+    // This map exists only for the current request. It is never serialized or sent.
+    values: Vec<String>,
+}
+
+impl SecretRedactionMap {
+    fn from_texts<'a>(texts: impl IntoIterator<Item = &'a str>) -> Self {
+        let mut map = Self::default();
+        for text in texts {
+            map.add_text(text);
+        }
+        map.values
+            .sort_by_key(|value| std::cmp::Reverse(value.len()));
+        map
+    }
+
+    fn for_magic_search(query: &str, relevant: &[ScoredCapture]) -> Self {
+        let mut texts = vec![query];
+        for item in relevant {
+            texts.push(item.capture.content_text.as_str());
+            if let Some(app_name) = item.capture.source_app_name.as_deref() {
+                texts.push(app_name);
+            }
+            if let Some(window_title) = item.capture.window_title.as_deref() {
+                texts.push(window_title);
+            }
+            for context in &item.capture.contexts {
+                texts.push(context.name.as_str());
+            }
+            for tag in &item.capture.tags {
+                texts.push(tag.as_str());
+            }
+            if let Some(ocr_text) = item
+                .capture
+                .ocr
+                .as_ref()
+                .and_then(|ocr| ocr.text.as_deref())
+            {
+                texts.push(ocr_text);
+            }
+        }
+        Self::from_texts(texts)
+    }
+
+    fn add_text(&mut self, text: &str) {
+        for matched in secret_pattern().find_iter(text) {
+            let value = matched.as_str();
+            if !self.values.iter().any(|existing| existing == value) {
+                self.values.push(value.to_string());
+            }
+        }
+    }
+
+    fn placeholder(index: usize) -> String {
+        format!("[SCRYPUPPY_SECRET_{}]", index + 1)
+    }
+
+    fn redact(&self, text: &str) -> String {
+        self.values
+            .iter()
+            .enumerate()
+            .fold(text.to_string(), |redacted, (index, value)| {
+                redacted.replace(value, &Self::placeholder(index))
+            })
+    }
+
+    fn restore_document(&self, text: &str) -> String {
+        let mut restored = text.to_string();
+        for (index, value) in self.values.iter().enumerate() {
+            restored = restored.replace(&Self::placeholder(index), value);
+            let masked = mask_secret(value);
+            let mask_is_unique = self
+                .values
+                .iter()
+                .filter(|candidate| mask_secret(candidate) == masked)
+                .count()
+                == 1;
+            if mask_is_unique {
+                restored = restored.replace(&masked, value);
+            }
+        }
+        restored
+    }
 }
 
 fn response_uses_expected_language(text: &str, portuguese: bool) -> bool {
@@ -3309,19 +3441,20 @@ fn preview_magic_search_document(
     let mut scored = score_captures_for_query(&query, captures, &intent);
     if sensitive_lookup {
         for item in &mut scored {
-            if extract_sensitive_value(&item.capture.content_text).is_some() {
+            if capture_sensitive_value(&item.capture).is_some() {
                 item.score += 100;
             }
         }
     }
-    let has_explicit_scope = request.tag.is_some() || request.context_id.is_some();
+    let use_full_scope =
+        request.tag.is_some() || request.context_id.is_some() || is_broad_collection_query(&query);
     let matching_count = scored
         .iter()
         .filter(|item| {
             if sensitive_lookup {
-                extract_sensitive_value(&item.capture.content_text).is_some()
+                capture_sensitive_value(&item.capture).is_some()
             } else {
-                item.score > 0 || has_explicit_scope
+                item.score > 0 || use_full_scope
             }
         })
         .count();
@@ -3360,13 +3493,14 @@ fn generate_magic_search_document(
     let mut scored = score_captures_for_query(&query, captures, &intent);
     if sensitive_lookup {
         for item in &mut scored {
-            if extract_sensitive_value(&item.capture.content_text).is_some() {
+            if capture_sensitive_value(&item.capture).is_some() {
                 item.score += 100;
             }
         }
     }
     scored.sort_by_key(|capture| std::cmp::Reverse(capture.score));
-    let has_explicit_scope = request.tag.is_some() || request.context_id.is_some();
+    let use_full_scope =
+        request.tag.is_some() || request.context_id.is_some() || is_broad_collection_query(&query);
     let limit = request
         .limit
         .unwrap_or(mode.evidence_limit())
@@ -3376,9 +3510,9 @@ fn generate_magic_search_document(
         .into_iter()
         .filter(|item| {
             if sensitive_lookup {
-                extract_sensitive_value(&item.capture.content_text).is_some()
+                capture_sensitive_value(&item.capture).is_some()
             } else {
-                item.score > 0 || has_explicit_scope
+                item.score > 0 || use_full_scope
             }
         })
         .take(limit)
@@ -3413,10 +3547,11 @@ fn generate_magic_search_document(
         ),
         MagicResponseMode::Document => magic_search_title(&query),
     };
+    let secret_map = SecretRedactionMap::for_magic_search(&query, &relevant);
     let sensitive_value = if sensitive_lookup {
         relevant
             .iter()
-            .find_map(|item| extract_sensitive_value(&item.capture.content_text))
+            .find_map(|item| capture_sensitive_value(&item.capture))
     } else {
         None
     };
@@ -3443,15 +3578,9 @@ fn generate_magic_search_document(
             None,
         )
     } else {
-        let prompt = build_magic_search_prompt(&query, &relevant, mode, portuguese);
+        let prompt = build_magic_search_prompt(&query, &relevant, mode, portuguese, &secret_map);
         let system = magic_search_system_prompt(mode, portuguese);
-        match ai::call_provider(
-            &settings.ai_provider,
-            &settings.ai_api_key,
-            &settings.ai_model,
-            &system,
-            &prompt,
-        ) {
+        match call_ai_raw(&settings, &system, &prompt) {
             Ok(mut markdown) => {
                 if !response_uses_expected_language(&markdown, portuguese) {
                     let retry_system = format!(
@@ -3463,13 +3592,7 @@ fn generate_magic_search_document(
                             "IMPORTANT: respond exclusively in English."
                         }
                     );
-                    if let Ok(retry) = ai::call_provider(
-                        &settings.ai_provider,
-                        &settings.ai_api_key,
-                        &settings.ai_model,
-                        &retry_system,
-                        &prompt,
-                    ) {
+                    if let Ok(retry) = call_ai_raw(&settings, &retry_system, &prompt) {
                         markdown = retry;
                     }
                 }
@@ -3489,7 +3612,8 @@ fn generate_magic_search_document(
         }
     };
     let markdown = if mode == MagicResponseMode::Document {
-        number_magic_search_sources(&markdown, &relevant, portuguese)
+        let restored = secret_map.restore_document(&markdown);
+        number_magic_search_sources(&restored, &relevant, portuguese)
     } else {
         markdown
     };
@@ -3546,7 +3670,7 @@ fn generate_magic_search_document(
                     capture.source_app_name,
                     capture.source_app_id,
                     capture.window_title,
-                    redact_sensitive_values(&excerpt_for_query(&capture.content_text)),
+                    excerpt_for_query(&redact_sensitive_values(&capture.content_text)),
                     asset_paths_json,
                 ],
             )
@@ -3677,7 +3801,12 @@ fn magic_search_system_prompt(mode: MagicResponseMode, portuguese: bool) -> Stri
     } else {
         "Use only the supplied evidence. Every factual statement must cite [capture:ID]. State gaps and do not wrap the response in a code fence."
     };
-    format!("{language} {format} {evidence}")
+    let placeholders = if portuguese {
+        "Valores sensíveis aparecem como [SCRYPUPPY_SECRET_N]. Preserve cada placeholder exatamente como recebido e nunca tente reconstruir o valor oculto."
+    } else {
+        "Sensitive values appear as [SCRYPUPPY_SECRET_N]. Preserve every placeholder exactly as received and never try to reconstruct the hidden value."
+    };
+    format!("{language} {format} {evidence} {placeholders}")
 }
 
 fn number_magic_search_sources(
@@ -3868,7 +3997,7 @@ fn add_magic_search_evidence_to_document(
             capture.source_app_name,
             capture.source_app_id,
             capture.window_title,
-            redact_sensitive_values(&excerpt_for_query(&capture.content_text)),
+            excerpt_for_query(&redact_sensitive_values(&capture.content_text)),
             serde_json::to_string(&asset_paths).map_err(err)?,
         ],
     )
@@ -3961,6 +4090,7 @@ fn build_magic_search_prompt(
     relevant: &[ScoredCapture],
     mode: MagicResponseMode,
     portuguese: bool,
+    secret_map: &SecretRedactionMap,
 ) -> String {
     let evidence = relevant
         .iter()
@@ -3971,24 +4101,26 @@ fn build_magic_search_prompt(
                 capture.id,
                 if portuguese { "Data" } else { "Date" },
                 capture.captured_at,
-                capture.source_app_name.as_deref().unwrap_or("unknown"),
+                secret_map.redact(capture.source_app_name.as_deref().unwrap_or("unknown")),
                 if portuguese { "Contexto" } else { "Context" },
-                context_label(capture),
+                secret_map.redact(&context_label(capture)),
                 if portuguese { "Contextos" } else { "Contexts" },
-                capture
-                    .contexts
-                    .iter()
-                    .map(|context| context.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                capture.tags.join(", "),
+                secret_map.redact(
+                    &capture
+                        .contexts
+                        .iter()
+                        .map(|context| context.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                secret_map.redact(&capture.tags.join(", ")),
                 if portuguese { "Texto" } else { "Text" },
-                shorten(&redact_sensitive_values(&capture.content_text), 1600),
+                shorten(&secret_map.redact(&capture.content_text), 1600),
                 capture
                     .ocr
                     .as_ref()
                     .and_then(|ocr| ocr.text.as_deref())
-                    .map(|text| shorten(&redact_sensitive_values(text), 500))
+                    .map(|text| shorten(&secret_map.redact(text), 500))
                     .unwrap_or_default(),
             )
         })
@@ -4012,10 +4144,13 @@ fn build_magic_search_prompt(
             "Generate a condensed and traceable Markdown document."
         }
     };
+    let safe_query = secret_map.redact(query);
     if portuguese {
-        format!("Consulta do usuário:\n{query}\n\nEvidências locais:\n{evidence}\n\n{instruction}")
+        format!(
+            "Consulta do usuário:\n{safe_query}\n\nEvidências locais:\n{evidence}\n\n{instruction}"
+        )
     } else {
-        format!("User query:\n{query}\n\nLocal evidence:\n{evidence}\n\n{instruction}")
+        format!("User query:\n{safe_query}\n\nLocal evidence:\n{evidence}\n\n{instruction}")
     }
 }
 
@@ -4166,6 +4301,39 @@ fn export_markdown(
     Ok(path.display().to_string())
 }
 
+fn export_markdown_to_path(requested_path: &str, markdown: &str) -> Result<String, String> {
+    let requested_path = requested_path.trim();
+    if requested_path.is_empty() {
+        return Err("Choose where the Markdown document should be saved.".to_string());
+    }
+
+    let mut path = PathBuf::from(requested_path);
+    if !path.is_absolute() {
+        return Err("The export destination must be an absolute path.".to_string());
+    }
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("md"))
+        .unwrap_or(true)
+    {
+        path.set_extension("md");
+    }
+    if path.is_dir() {
+        return Err("Choose a Markdown file, not a directory.".to_string());
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| parent.is_dir())
+        .ok_or_else(|| "The selected export folder does not exist.".to_string())?;
+    if !parent.is_absolute() {
+        return Err("The export destination must be an absolute path.".to_string());
+    }
+
+    fs::write(&path, markdown).map_err(err)?;
+    Ok(path.display().to_string())
+}
+
 fn call_ai_provider(
     settings: &SettingsDto,
     query: &str,
@@ -4179,13 +4347,7 @@ fn call_ai_provider(
     };
     let prompt = build_ai_prompt(query, local_answer, portuguese);
 
-    ai::call_provider(
-        &settings.ai_provider,
-        &settings.ai_api_key,
-        &settings.ai_model,
-        system,
-        &prompt,
-    )
+    call_ai_raw(settings, system, &prompt)
 }
 
 fn build_ai_prompt(query: &str, local_answer: &ChatAnswer, portuguese: bool) -> String {
@@ -5597,10 +5759,13 @@ fn call_ai_for_context_suggestions(
     captures: &[CaptureDto],
 ) -> Result<String, String> {
     let rows = captures.iter().filter(|capture| capture.kind != "image").map(|capture| json!({
-        "id": capture.id, "kind": capture.kind, "app": capture.source_app_name,
-        "window": capture.window_title, "text": shorten(&capture.content_text, 700),
-        "entities": capture.entities.iter().map(|entity| format!("{}:{}", entity.kind, entity.value)).collect::<Vec<_>>(),
-        "contexts": context_names(capture),
+        "id": capture.id,
+        "kind": capture.kind,
+        "app": capture.source_app_name.as_deref().map(redact_sensitive_values),
+        "window": capture.window_title.as_deref().map(redact_sensitive_values),
+        "text": shorten(&redact_sensitive_values(&capture.content_text), 700),
+        "entities": capture.entities.iter().map(|entity| redact_sensitive_values(&format!("{}:{}", entity.kind, entity.value))).collect::<Vec<_>>(),
+        "contexts": context_names(capture).into_iter().map(|context| redact_sensitive_values(&context)).collect::<Vec<_>>(),
     })).collect::<Vec<_>>();
     let (system, prompt) = if settings.language == "pt-BR" {
         ("Você sugere associações a contextos no ScryPuppy. Responda apenas JSON e nunca invente IDs.",
@@ -5654,12 +5819,16 @@ fn parse_ai_context_suggestions(response: &str) -> Vec<AiContextSuggestion> {
 }
 
 fn call_ai_raw(settings: &SettingsDto, system: &str, prompt: &str) -> Result<String, String> {
+    // Final provider boundary: callers should pre-redact before truncation, and this
+    // second pass prevents a complete recognized credential from leaving the device.
+    let safe_system = redact_sensitive_values(system);
+    let safe_prompt = redact_sensitive_values(prompt);
     ai::call_provider(
         &settings.ai_provider,
         &settings.ai_api_key,
         &settings.ai_model,
-        system,
-        prompt,
+        &safe_system,
+        &safe_prompt,
     )
 }
 
@@ -6522,6 +6691,7 @@ fn io_other(error: impl ToString) -> std::io::Error {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             restore_main_window(app);
             process_import_args(app.clone(), args);
@@ -6734,6 +6904,54 @@ mod tests {
         assert!(!query_requests_application_id(
             "Show me the most recent text from app X"
         ));
+    }
+
+    #[test]
+    fn broad_collection_queries_work_in_english_and_portuguese() {
+        for query in [
+            "all",
+            "show me everything I copied",
+            "all my contexts",
+            "tudo",
+            "mostre tudo que copiei",
+            "todas as capturas",
+        ] {
+            assert!(
+                is_broad_collection_query(query),
+                "expected a full-scope query: {query}"
+            );
+        }
+
+        for query in ["all news", "everything about Rust", "tudo sobre o projeto"] {
+            assert!(
+                !is_broad_collection_query(query),
+                "expected a subject query: {query}"
+            );
+        }
+    }
+
+    #[test]
+    fn secret_redaction_map_restores_document_values_only_after_provider_output() {
+        let text_secret = "sk-proj-1234567890abcdef";
+        let ocr_secret = "ghp_12345678901234567890";
+        let content = format!("Text credential: {text_secret}");
+        let ocr = format!("OCR credential: {ocr_secret}");
+        let map = SecretRedactionMap::from_texts([content.as_str(), ocr.as_str()]);
+        let safe_prompt = map.redact(&format!("{content}\n{ocr}"));
+
+        assert!(!safe_prompt.contains(text_secret));
+        assert!(!safe_prompt.contains(ocr_secret));
+        assert!(safe_prompt.contains("[SCRYPUPPY_SECRET_"));
+
+        let restored = map.restore_document(&safe_prompt);
+        assert!(restored.contains(text_secret));
+        assert!(restored.contains(ocr_secret));
+
+        let restored_legacy_mask = map.restore_document(&format!(
+            "Credential returned as `{}`",
+            mask_secret(text_secret)
+        ));
+        assert!(restored_legacy_mask.contains(text_secret));
     }
 
     #[test]

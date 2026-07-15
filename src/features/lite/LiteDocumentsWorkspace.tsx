@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import * as api from "../../api/tauri";
 import { MarkdownDocument } from "../../components/MarkdownDocument";
 import { translate, type AppLanguage } from "../../i18n";
@@ -17,6 +18,10 @@ type LiteDocumentsWorkspaceProps = {
 };
 
 type SaveState = "idle" | "saving" | "saved" | "error";
+type PendingConfirmation =
+  | { kind: "delete-document" }
+  | { kind: "delete-versions" }
+  | { kind: "remove-source"; captureId: string; number: number };
 
 export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, onNewDocument, onClearStatus, onStatus }: LiteDocumentsWorkspaceProps) {
   const [history, setHistory] = useState<MagicSearchListItem[]>([]);
@@ -35,9 +40,29 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
   const [sourceActionId, setSourceActionId] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [detail, setDetail] = useState<Capture | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
+  const [isConfirming, setIsConfirming] = useState(false);
   const draftRef = useRef(draft);
   draftRef.current = draft;
   const tr = useCallback((english: string, variables?: Record<string, string | number>) => translate(language, english, variables), [language]);
+  const confirmationCopy = useMemo(() => {
+    if (!pendingConfirmation) return null;
+    if (pendingConfirmation.kind === "delete-document") return {
+      title: tr("Delete this document?"),
+      description: tr("This removes the document and every saved version. This action cannot be undone."),
+      confirmLabel: tr("Delete document"),
+    };
+    if (pendingConfirmation.kind === "delete-versions") return {
+      title: tr("Delete older versions?"),
+      description: tr("Only the current version will be kept. This action cannot be undone."),
+      confirmLabel: tr("Delete versions"),
+    };
+    return {
+      title: tr("Remove source [{number}]?", { number: pendingConfirmation.number }),
+      description: tr("The source will be removed and the remaining citations will be renumbered."),
+      confirmLabel: tr("Remove source"),
+    };
+  }, [pendingConfirmation, tr]);
 
   const applyDocument = useCallback((nextDocument: MagicSearchDocument) => {
     setDocument(nextDocument);
@@ -99,6 +124,15 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
   }, [document, draft, onStatus]);
 
   useEffect(() => {
+    if (!pendingConfirmation) return;
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isConfirming) setPendingConfirmation(null);
+    };
+    globalThis.document.addEventListener("keydown", handleEscape);
+    return () => globalThis.document.removeEventListener("keydown", handleEscape);
+  }, [isConfirming, pendingConfirmation]);
+
+  useEffect(() => {
     if (!isManagingSources) return;
     let active = true;
     setIsSourceLoading(true);
@@ -154,8 +188,14 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
   async function exportDocument() {
     if (!document) return;
     try {
-      await saveDraftIfNeeded(document);
-      const path = await api.exportMagicSearch(document.id);
+      const current = await saveDraftIfNeeded(document);
+      const destination = await saveFile({
+        title: tr("Export Markdown document"),
+        defaultPath: markdownFileName(current.title),
+        filters: [{ name: tr("Markdown document"), extensions: ["md"] }],
+      });
+      if (!destination) return;
+      const path = await api.exportMagicSearch(current.id, destination);
       onStatus(tr("Document exported to {path}", { path }));
     } catch (error) {
       onStatus(String(error));
@@ -181,7 +221,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
   }
 
   async function deleteDocument() {
-    if (!document || !window.confirm(tr("Delete this document and all its versions?"))) return;
+    if (!document) return;
     try {
       await api.deleteMagicSearch(document.root_id);
       await refreshHistory(null);
@@ -192,7 +232,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
   }
 
   async function deleteOldVersions() {
-    if (!document || currentVersionCount < 2 || !window.confirm(tr("Delete all other versions of this document?"))) return;
+    if (!document || currentVersionCount < 2) return;
     try {
       const cleaned = await api.deleteOldMagicSearchVersions(document.id);
       await refreshHistory(cleaned.id);
@@ -218,8 +258,8 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
     }
   }
 
-  async function removeSource(captureId: string, number: number) {
-    if (!document || !window.confirm(tr("Remove source [{number}] from this document?", { number }))) return;
+  async function removeSource(captureId: string) {
+    if (!document) return;
     setSourceActionId(captureId);
     try {
       const current = await saveDraftIfNeeded(document);
@@ -231,6 +271,20 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       onStatus(String(error));
     } finally {
       setSourceActionId(null);
+    }
+  }
+
+  async function confirmPendingAction() {
+    const action = pendingConfirmation;
+    if (!action || isConfirming) return;
+    setIsConfirming(true);
+    try {
+      if (action.kind === "delete-document") await deleteDocument();
+      else if (action.kind === "delete-versions") await deleteOldVersions();
+      else await removeSource(action.captureId);
+    } finally {
+      setIsConfirming(false);
+      setPendingConfirmation(null);
     }
   }
 
@@ -267,9 +321,9 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       <div className="lite-document-actions">
         <button onClick={onNewDocument}><LiteIcon name="plus" />{tr("New document")}</button>
         <button disabled={isGenerating} onClick={() => void updateWithAi()}><LiteIcon name={isGenerating ? "loader" : "refresh"} />{tr(isGenerating ? "Updating..." : "Update with AI")}</button>
-        {currentVersionCount > 1 && <button onClick={() => void deleteOldVersions()}><LiteIcon name="layers" />{tr("Clean versions")}</button>}
-        <button className="is-danger" onClick={() => void deleteDocument()}><LiteIcon name="trash" />{tr("Delete")}</button>
-        <button className="is-primary" onClick={() => void exportDocument()}><LiteIcon name="download" />{tr("Export .md")}</button>
+        {currentVersionCount > 1 && <button onClick={() => setPendingConfirmation({ kind: "delete-versions" })}><LiteIcon name="layers" />{tr("Clean versions")}</button>}
+        <button className="is-danger" onClick={() => setPendingConfirmation({ kind: "delete-document" })}><LiteIcon name="trash" />{tr("Delete")}</button>
+        <button className="is-primary" onClick={() => void exportDocument()}><LiteIcon name="export" />{tr("Export .md")}</button>
       </div>
     </header>
 
@@ -323,7 +377,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
                 <span>{index + 1}</span>
                 <div><strong>{source.app_name || tr("Unknown application")}</strong><small>{source.window_title || formatDocumentDate(source.captured_at, language)}</small><p>{source.excerpt}</p></div>
               </button>
-              <button className="lite-document-source-remove" disabled={sourceActionId === source.capture_id} onClick={() => void removeSource(source.capture_id, index + 1)} aria-label={tr("Remove source [{number}]", { number: index + 1 })}><LiteIcon name={sourceActionId === source.capture_id ? "loader" : "close"} /></button>
+              <button className="lite-document-source-remove" disabled={sourceActionId === source.capture_id} onClick={() => setPendingConfirmation({ kind: "remove-source", captureId: source.capture_id, number: index + 1 })} aria-label={tr("Remove source [{number}]", { number: index + 1 })}><LiteIcon name={sourceActionId === source.capture_id ? "loader" : "close"} /></button>
             </div>)}
           </div>
         </>}
@@ -332,7 +386,37 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
 
     {document.generation_warning && <div className="lite-document-warning"><LiteIcon name="info" />{document.generation_warning}</div>}
     {detail && <CaptureDetailsDialog capture={detail} contexts={[]} language={language} readOnly onClose={() => setDetail(null)} onChanged={async () => undefined} onError={onStatus} />}
+    {pendingConfirmation && confirmationCopy && <div className="lite-modal-backdrop" onMouseDown={(event) => {
+      if (!isConfirming && event.currentTarget === event.target) setPendingConfirmation(null);
+    }}>
+      <section className="lite-modal-surface lite-confirm-modal" role="alertdialog" aria-modal="true" aria-labelledby="lite-confirm-title" aria-describedby="lite-confirm-description">
+        <header>
+          <span className="lite-confirm-icon"><LiteIcon name="trash" /></span>
+          <div>
+            <span className="lite-eyebrow">{tr("Permanent action")}</span>
+            <h2 id="lite-confirm-title">{confirmationCopy.title}</h2>
+            <p id="lite-confirm-description">{confirmationCopy.description}</p>
+          </div>
+        </header>
+        <footer>
+          <button autoFocus className="lite-confirm-cancel" disabled={isConfirming} onClick={() => setPendingConfirmation(null)}>{tr("Cancel")}</button>
+          <button className="lite-confirm-danger" disabled={isConfirming} onClick={() => void confirmPendingAction()}>
+            <LiteIcon name={isConfirming ? "loader" : "trash"} />{isConfirming ? tr("Working...") : confirmationCopy.confirmLabel}
+          </button>
+        </footer>
+      </section>
+    </div>}
   </section>;
+}
+
+function markdownFileName(title: string) {
+  const slug = title
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return `${slug || "scrypuppy-document"}.md`;
 }
 
 function compactSource(value: string) {
