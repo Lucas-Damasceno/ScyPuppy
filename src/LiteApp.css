@@ -204,9 +204,15 @@
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  border: 1px solid var(--lite-focus-border);
+  border: 1px solid var(--lite-border);
   border-radius: var(--ui-radius-control);
   background: var(--lite-panel);
+  color: var(--lite-muted);
+  box-shadow: none;
+}
+
+.lite-new-context-field:focus-within {
+  border-color: var(--lite-focus-border);
   color: var(--lite-accent);
   box-shadow: var(--lite-focus-ring);
 }
@@ -220,6 +226,12 @@
   color: var(--lite-text);
   font: inherit;
   font-size: 12px;
+}
+
+.lite-new-context-field input:focus,
+.lite-new-context-field input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .lite-new-context input:disabled { opacity: .62; }
