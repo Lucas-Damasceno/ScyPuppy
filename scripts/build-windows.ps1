@@ -7,8 +7,8 @@ $nsisScriptRoot = Join-Path $targetRoot "nsis\x64"
 $nsisScript = Join-Path $nsisScriptRoot "installer.nsi"
 $cleanBinary = Join-Path $targetRoot "scrypuppy.exe"
 $makensis = Join-Path $env:LOCALAPPDATA "tauri\NSIS\makensis.exe"
-$config = Get-Content (Join-Path $tauriRoot "tauri.conf.json") -Raw | ConvertFrom-Json
-$installerName = "ScryPuppy_$($config.version)_x64-setup.exe"
+$metadata = (& (Join-Path $PSScriptRoot "release-metadata.ps1")) | ConvertFrom-Json
+$installerName = $metadata.installer_name
 $bundleRoot = Join-Path $targetRoot "bundle\nsis"
 $installer = Join-Path $bundleRoot $installerName
 
