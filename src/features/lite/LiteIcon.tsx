@@ -1,11 +1,12 @@
 export type LiteIconName =
-  | "arrow" | "check" | "close" | "copy" | "edit" | "export" | "eye" | "file" | "folder"
+  | "arrow" | "check" | "chevron" | "close" | "copy" | "edit" | "export" | "eye" | "file" | "folder"
   | "globe" | "info" | "layers" | "loader" | "lock" | "plus" | "refresh" | "search"
   | "settings" | "sparkles" | "trash";
 
 const iconPaths: Record<LiteIconName, string[]> = {
-  arrow: ["M5 12h14", "m13-6 6 6-6 6"],
+  arrow: ["M5 12h14", "M13 6l6 6-6 6"],
   check: ["m5 12 4 4L19 6"],
+  chevron: ["m9 18 6-6-6-6"],
   close: ["M18 6 6 18", "m6 6 12 12"],
   copy: ["M9 9h11v11H9z", "M4 15V4h11"],
   edit: ["M4 20h4L19 9l-4-4L4 16z", "m13-13 4 4"],

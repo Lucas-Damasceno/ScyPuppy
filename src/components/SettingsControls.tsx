@@ -81,7 +81,7 @@ export function AiControls({ settings, options, tr, onPatch, onSaveCredential, o
 
 export function SettingsSaveFeedback({ tr, state, error, onRetry }: { tr: Translate; state: SettingsSaveState; error: string | null; onRetry?: () => void }) {
   if (state === "saving") return <span className="settings-save-feedback is-saving">{tr("Saving...")}</span>;
-  if (state === "error") return <span className="settings-save-feedback is-error">{tr("Could not save settings.")} {onRetry && <button type="button" onClick={onRetry}>{tr("Try again")}</button>} {error && <small>{error}</small>}</span>;
+  if (state === "error") return <span className="settings-save-feedback is-error">{tr("Could not save settings.")} {onRetry && <button type="button" onClick={onRetry}>{tr("Try again")}</button>} {error && <small>{tr(error)}</small>}</span>;
   if (state === "saved") return <span className="settings-save-feedback is-saved">{tr("Saved")}</span>;
   return null;
 }

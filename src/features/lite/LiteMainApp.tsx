@@ -7,7 +7,7 @@ import { liteDefaultSettings } from "../../config/defaultSettings";
 import { useLiteWorkspace } from "../../hooks/useLiteWorkspace";
 import { useSettingsCoordinator } from "../../hooks/useSettingsCoordinator";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
-import { normalizeLanguage, translate } from "../../i18n";
+import { normalizeLanguage, translate, translateGeneratedContent } from "../../i18n";
 import type { AiProviderOption, Capture } from "../../types";
 import { AddItemsToContextDialog } from "./AddItemsToContextDialog";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
@@ -301,7 +301,7 @@ export function LiteMainApp() {
           </button>}
         </header>
 
-        {status && <div className="lite-status"><LiteIcon name="info" /><span>{status}</span><button onClick={() => setStatus(null)}><LiteIcon name="close" /></button></div>}
+        {status && <div className="lite-status"><LiteIcon name="info" /><span>{tr(status)}</span><button onClick={() => setStatus(null)}><LiteIcon name="close" /></button></div>}
 
         <div ref={captureListRef} className="lite-capture-list" aria-busy={isLoading} aria-live="polite">
           {isLoading && captures.length === 0 ? (
@@ -323,7 +323,7 @@ export function LiteMainApp() {
               </button> : <span className="lite-capture-app">{appInitial(capture.source_app_name)}</span>}
               <div className="lite-capture-main">
                 <button className="lite-capture-content" onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => setStatus(String(error)))} title={tr("Copy")}>
-                  <strong>{compactContent(capture.content_text)}</strong>
+                  <strong>{compactContent(translateGeneratedContent(language, capture.content_text))}</strong>
                   <small>{formatRelativeDate(capture.captured_at, language)}</small>
                 </button>
                 {capture.contexts.length > 0 && <div className="lite-capture-categories" title={capture.contexts.map((context) => context.name).join(", ")}>
@@ -343,11 +343,11 @@ export function LiteMainApp() {
           <span>{tr("Showing {start}-{end} of {total}", { start: captureRangeStart, end: captureRangeEnd, total: captureTotal })}</span>
           <div>
             <button className="is-previous" type="button" disabled={capturePage === 0 || isLoading} onClick={() => setCapturePage((page) => Math.max(0, page - 1))} aria-label={tr("Previous page")} title={tr("Previous page")}>
-              <LiteIcon name="arrow" />
+              <LiteIcon name="chevron" size={15} />
             </button>
-            <strong>{tr("Page {page} of {pages}", { page: capturePage + 1, pages: capturePageCount })}</strong>
+            <strong aria-live="polite">{tr("Page {page} of {pages}", { page: capturePage + 1, pages: capturePageCount })}</strong>
             <button type="button" disabled={capturePage + 1 >= capturePageCount || isLoading} onClick={() => setCapturePage((page) => Math.min(capturePageCount - 1, page + 1))} aria-label={tr("Next page")} title={tr("Next page")}>
-              <LiteIcon name="arrow" />
+              <LiteIcon name="chevron" size={15} />
             </button>
           </div>
         </nav>}

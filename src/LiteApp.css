@@ -436,6 +436,7 @@
   background: var(--lite-panel);
   color: var(--lite-muted);
   cursor: pointer;
+  transition: border-color .12s ease, background .12s ease, color .12s ease;
 }
 .lite-pagination button:hover:not(:disabled) { border-color: var(--lite-accent-border); background: var(--lite-accent-soft); color: var(--lite-accent); }
 .lite-pagination button:disabled { opacity: .38; cursor: default; }

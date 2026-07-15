@@ -221,7 +221,7 @@ export function LiteMagicPalette() {
           {isLoading ? (
             <LiteEmpty icon="loader" title={tr(mode === "document" ? "Gathering and condensing evidence..." : "Searching your captures...")} description={tr("ScryPuppy is checking the most relevant evidence.")} />
           ) : error ? (
-            <LiteEmpty icon="info" title={tr("No answer found")} description={error} />
+            <LiteEmpty icon="info" title={tr("No answer found")} description={tr(error)} />
           ) : document && mode === "document" ? (
             <div className="lite-document-created">
               <span className="lite-document-created-icon"><LiteIcon name="check" size={22} /></span>
@@ -230,7 +230,7 @@ export function LiteMagicPalette() {
                 <h2>{document.title}</h2>
                 <p>{tr("A cited Markdown document was created from {count} sources.", { count: document.evidence_count })}</p>
               </div>
-              {document.generation_warning && <p className="lite-answer-warning"><LiteIcon name="info" />{document.generation_warning}</p>}
+              {document.generation_warning && <p className="lite-answer-warning"><LiteIcon name="info" />{tr(document.generation_warning)}</p>}
               <button className="lite-primary-button" onClick={() => api.openMagicDocument(document.id).catch((reason) => setError(String(reason)))}>
                 <LiteIcon name="file" />{tr("Open document")}
               </button>
@@ -239,7 +239,7 @@ export function LiteMagicPalette() {
             <div className="lite-direct-answer">
               <span className="lite-eyebrow">{tr("Answer")}</span>
               <div className="lite-direct-value">{visibleAnswer}</div>
-              {document.generation_warning && <p className="lite-answer-warning"><LiteIcon name="info" />{document.generation_warning}</p>}
+              {document.generation_warning && <p className="lite-answer-warning"><LiteIcon name="info" />{tr(document.generation_warning)}</p>}
               <div className="lite-direct-actions">
                 {document.sensitive_value && <button onClick={() => setRevealed((value) => !value)}><LiteIcon name="eye" />{tr(revealed ? "Hide" : "Reveal")}</button>}
                 <button className="is-primary" onClick={() => api.copyTextToClipboard(copyAnswer).catch((reason) => setError(String(reason)))}><LiteIcon name="copy" />{tr("Copy")}</button>

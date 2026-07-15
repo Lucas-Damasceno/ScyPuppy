@@ -518,7 +518,7 @@ impl ClipboardPayload {
             ClipboardPayload::Text(text) => text.clone(),
             ClipboardPayload::Image(image) => {
                 format!(
-                    "[Imagem copiada do clipboard: {}x{}]",
+                    "[Image copied from clipboard: {}x{}]",
                     image.width, image.height
                 )
             }
@@ -4599,7 +4599,7 @@ fn import_file_capture(
         .and_then(|value| value.to_str())
         .unwrap_or("arquivo");
     let content_text = if is_image {
-        format!("Imagem salva pelo Explorer: {file_name}")
+        format!("Image saved from Explorer: {file_name}")
     } else {
         String::from_utf8(bytes.clone())
             .map_err(|_| "O arquivo de texto precisa estar codificado em UTF-8.".to_string())?
@@ -6219,7 +6219,7 @@ fn read_clipboard_after_copy(marker: &str) -> Result<ClipboardPayload, String> {
         }
     }
 
-    Err("O app focado nao atualizou o clipboard depois do atalho. Tente soltar as teclas e repetir a captura.".into())
+    Err("The focused app did not update the clipboard after the shortcut. Release the keys and try capturing again.".into())
 }
 
 fn mark_current_clipboard_sequence(state: &AppState) {
