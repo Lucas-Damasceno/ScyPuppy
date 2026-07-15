@@ -160,6 +160,24 @@ function filterCaptures(args: unknown): Capture[] {
   });
 }
 
+function capturePage(args: unknown): { items: Capture[]; total: number } {
+  const filter = (args as {
+    filter?: {
+      context_id?: string | null;
+      search?: string | null;
+      limit?: number;
+      offset?: number;
+    };
+  } | undefined)?.filter;
+  const matches = filterCaptures(args);
+  const offset = Math.max(0, filter?.offset ?? 0);
+  const limit = Math.max(1, filter?.limit ?? matches.length);
+  return {
+    items: matches.slice(offset, offset + limit),
+    total: matches.length,
+  };
+}
+
 export function installDocsPreview(): void {
   if (!import.meta.env.DEV || !new URLSearchParams(window.location.search).has(previewKey)) return;
 
@@ -187,6 +205,7 @@ export function installDocsPreview(): void {
       if (command === "get_library_counts") return { all: 24, inbox: 10, content_base: 3 };
       if (command === "list_categories") return [];
       if (command === "list_captures") return filterCaptures(args);
+      if (command === "list_capture_page") return capturePage(args);
       if (command === "get_capture") {
         const id = (args as { id?: string } | undefined)?.id;
         return captures.find((item) => item.id === id) ?? null;

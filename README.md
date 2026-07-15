@@ -6,13 +6,13 @@
 
 Capture useful information, keep its source, organize it into Contexts, and turn related captures into cited documents without giving up local control.
 
-[![Release: 1.0 Beta](https://img.shields.io/badge/Release-1.0_Beta-E5484D.svg)](https://github.com/Lucas-Damasceno/ScyPuppy/releases)
+[![Release: 1.0 Beta](https://img.shields.io/badge/Release-1.0_Beta-E5484D.svg)](https://github.com/Lucas-Damasceno/ScryPuppy/releases)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-E5484D.svg)](LICENSE)
 [![Built with Tauri](https://img.shields.io/badge/Built_with-Tauri_2-24C8DB?logo=tauri&logoColor=white)](https://v2.tauri.app/)
 [![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://react.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](#install)
 
-[Download](https://github.com/Lucas-Damasceno/ScyPuppy/releases) · [Build from source](#build-from-source) · [Architecture](ARCHITECTURE.md) · [UI reference](prints.md)
+[Download](https://github.com/Lucas-Damasceno/ScryPuppy/releases) · [Build from source](#build-from-source) · [Architecture](ARCHITECTURE.md) · [UI reference](prints.md)
 
 </div>
 
@@ -104,7 +104,7 @@ Closing the main window keeps ScryPuppy available from the Windows tray for shor
 
 ## Install
 
-Download the latest prerelease from the [Releases page](https://github.com/Lucas-Damasceno/ScyPuppy/releases).
+Download the latest prerelease from the [Releases page](https://github.com/Lucas-Damasceno/ScryPuppy/releases).
 
 Requirements:
 
@@ -117,7 +117,7 @@ Requirements:
 Install Node.js with npm, Rust, and the [Tauri Windows prerequisites](https://v2.tauri.app/start/prerequisites/).
 
 ```powershell
-git clone https://github.com/Lucas-Damasceno/ScyPuppy.git
+git clone https://github.com/Lucas-Damasceno/ScryPuppy.git
 cd ScyPuppy
 npm install
 npm run tauri dev
