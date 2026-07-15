@@ -192,6 +192,6 @@ ScryPuppy is distributed under the [GNU Affero General Public License v3.0](LICE
 
 <div align="center">
 
-Built to make copied information useful again.
+Some dogs watch data. This one watches your clipboard.
 
 </div>
