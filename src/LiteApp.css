@@ -204,9 +204,15 @@
   align-items: center;
   gap: 6px;
   padding: 0 8px;
-  border: 1px solid var(--lite-focus-border);
+  border: 1px solid var(--lite-border);
   border-radius: var(--ui-radius-control);
   background: var(--lite-panel);
+  color: var(--lite-muted);
+  box-shadow: none;
+}
+
+.lite-new-context-field:focus-within {
+  border-color: var(--lite-focus-border);
   color: var(--lite-accent);
   box-shadow: var(--lite-focus-ring);
 }
@@ -220,6 +226,12 @@
   color: var(--lite-text);
   font: inherit;
   font-size: 12px;
+}
+
+.lite-new-context-field input:focus,
+.lite-new-context-field input:focus-visible {
+  outline: none;
+  box-shadow: none;
 }
 
 .lite-new-context input:disabled { opacity: .62; }
@@ -396,7 +408,39 @@
   overflow: auto;
   scrollbar-width: thin;
 }
-.lite-capture-list.is-loading { opacity: .68; }
+
+.lite-pagination {
+  display: flex;
+  min-height: 42px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 7px 2px 0;
+  border-top: 1px solid var(--lite-border);
+  color: var(--lite-muted);
+  font-size: 9px;
+}
+
+.lite-pagination > div { display: flex; align-items: center; gap: 7px; }
+.lite-pagination strong { min-width: 82px; color: var(--lite-text); font-size: 9px; font-weight: 680; text-align: center; }
+.lite-pagination button {
+  display: grid;
+  width: var(--ui-icon-button-size);
+  height: var(--ui-icon-button-size);
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--lite-border);
+  border-radius: var(--ui-radius-control);
+  background: var(--lite-panel);
+  color: var(--lite-muted);
+  cursor: pointer;
+  transition: border-color .12s ease, background .12s ease, color .12s ease;
+}
+.lite-pagination button:hover:not(:disabled) { border-color: var(--lite-accent-border); background: var(--lite-accent-soft); color: var(--lite-accent); }
+.lite-pagination button:disabled { opacity: .38; cursor: default; }
+.lite-pagination button.is-previous svg { transform: rotate(180deg); }
 
 .lite-capture-row {
   display: grid;

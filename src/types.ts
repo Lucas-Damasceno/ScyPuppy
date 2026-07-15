@@ -59,6 +59,7 @@ export type ApplyContextSuggestion = {
 };
 export type ApplyContextSuggestionsResult = { contexts_created: number; associations_added: number };
 export type CaptureFilter = { context_id: string | null; search: string | null; tag: string | null; limit: number; offset: number };
+export type CapturePage = { items: Capture[]; total: number };
 export type ChatRequest = { query: string; context_id: string | null; app: string | null; date_from: string | null; date_to: string | null; limit: number };
 export type TagDocument = {
   tag: string; markdown: string; capture_count: number; app_count: number; context_count: number;

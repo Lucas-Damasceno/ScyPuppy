@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as api from "../../api/tauri";
-import { translate, type AppLanguage } from "../../i18n";
+import { translate, translateGeneratedContent, type AppLanguage } from "../../i18n";
 import type { Capture, Context } from "../../types";
 import { formatDate } from "./formatters";
 import { LiteIcon } from "./LiteIcon";
@@ -78,7 +78,7 @@ export function CaptureDetailsDialog({
         <div className="lite-detail-scroll">
           <section className="lite-detail-section">
             <div className="lite-section-heading"><h3>{tr("Full text")}</h3><button onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => onError(String(error)))}><LiteIcon name="copy" />{tr("Copy")}</button></div>
-            <pre>{capture.content_text}</pre>
+            <pre>{translateGeneratedContent(language, capture.content_text)}</pre>
           </section>
 
           {!readOnly && <section className="lite-detail-section">

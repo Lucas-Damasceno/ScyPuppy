@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import * as api from "../../api/tauri";
 import { MarkdownDocument } from "../../components/MarkdownDocument";
-import { translate, type AppLanguage } from "../../i18n";
+import { translate, translateGeneratedContent, type AppLanguage } from "../../i18n";
 import type { Capture, MagicSearchDocument, MagicSearchListItem } from "../../types";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
 import { LiteEmpty } from "./LiteEmpty";
@@ -327,7 +327,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       </div>
     </header>
 
-    {status && <div className="lite-status"><LiteIcon name="info" /><span>{status}</span><button onClick={onClearStatus}><LiteIcon name="close" /></button></div>}
+    {status && <div className="lite-status"><LiteIcon name="info" /><span>{tr(status)}</span><button onClick={onClearStatus}><LiteIcon name="close" /></button></div>}
 
     <div className={`lite-document-layout ${isManagingSources ? "is-managing-sources" : ""}`}>
       <aside className="lite-document-history" aria-label={tr("Document history")}>
@@ -365,7 +365,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
             {isSourceLoading && <span className="lite-source-loading"><LiteIcon name="loader" />{tr("Searching...")}</span>}
             {!isSourceLoading && availableSourceCandidates.map((capture) => <button key={capture.id} disabled={sourceActionId === capture.id} onClick={() => void addSource(capture.id)}>
               <span><LiteIcon name={sourceActionId === capture.id ? "loader" : "plus"} /></span>
-              <div><strong>{capture.source_app_name || tr("Unknown application")}</strong><p>{compactSource(capture.content_text)}</p></div>
+              <div><strong>{capture.source_app_name || tr("Unknown application")}</strong><p>{compactSource(translateGeneratedContent(language, capture.content_text))}</p></div>
             </button>)}
             {!isSourceLoading && availableSourceCandidates.length === 0 && <span className="lite-source-loading">{tr("No available captures found.")}</span>}
           </div>
@@ -375,7 +375,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
             {document.evidence.map((source, index) => <div className="lite-document-source-item" key={source.capture_id}>
               <button className="lite-document-source-open" onClick={() => void openSource(source.capture_id)}>
                 <span>{index + 1}</span>
-                <div><strong>{source.app_name || tr("Unknown application")}</strong><small>{source.window_title || formatDocumentDate(source.captured_at, language)}</small><p>{source.excerpt}</p></div>
+                <div><strong>{source.app_name || tr("Unknown application")}</strong><small>{source.window_title || formatDocumentDate(source.captured_at, language)}</small><p>{translateGeneratedContent(language, source.excerpt)}</p></div>
               </button>
               <button className="lite-document-source-remove" disabled={sourceActionId === source.capture_id} onClick={() => setPendingConfirmation({ kind: "remove-source", captureId: source.capture_id, number: index + 1 })} aria-label={tr("Remove source [{number}]", { number: index + 1 })}><LiteIcon name={sourceActionId === source.capture_id ? "loader" : "close"} /></button>
             </div>)}
@@ -384,7 +384,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       </aside>
     </div>
 
-    {document.generation_warning && <div className="lite-document-warning"><LiteIcon name="info" />{document.generation_warning}</div>}
+    {document.generation_warning && <div className="lite-document-warning"><LiteIcon name="info" />{tr(document.generation_warning)}</div>}
     {detail && <CaptureDetailsDialog capture={detail} contexts={[]} language={language} readOnly onClose={() => setDetail(null)} onChanged={async () => undefined} onError={onStatus} />}
     {pendingConfirmation && confirmationCopy && <div className="lite-modal-backdrop" onMouseDown={(event) => {
       if (!isConfirming && event.currentTarget === event.target) setPendingConfirmation(null);

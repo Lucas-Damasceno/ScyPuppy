@@ -7,7 +7,7 @@ import { liteDefaultSettings } from "../../config/defaultSettings";
 import { useLiteWorkspace } from "../../hooks/useLiteWorkspace";
 import { useSettingsCoordinator } from "../../hooks/useSettingsCoordinator";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
-import { normalizeLanguage, translate } from "../../i18n";
+import { normalizeLanguage, translate, translateGeneratedContent } from "../../i18n";
 import type { AiProviderOption, Capture } from "../../types";
 import { AddItemsToContextDialog } from "./AddItemsToContextDialog";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
@@ -16,6 +16,8 @@ import { LiteEmpty } from "./LiteEmpty";
 import { LiteDocumentsWorkspace } from "./LiteDocumentsWorkspace";
 import { LiteIcon } from "./LiteIcon";
 import { LiteSettingsDialog } from "./LiteSettingsDialog";
+
+const capturePageSize = 50;
 
 export function LiteMainApp() {
   const docsPreview = import.meta.env.DEV
@@ -29,6 +31,7 @@ export function LiteMainApp() {
     docsPreview === "context-picker" ? "product-launch" : null,
   );
   const [search, setSearch] = useState("");
+  const [capturePage, setCapturePage] = useState(0);
   const [magicQuery, setMagicQuery] = useState("");
   const [searchMode, setSearchMode] = useState<"local" | "magic">("local");
   const [detail, setDetail] = useState<Capture | null>(null);
@@ -43,8 +46,9 @@ export function LiteMainApp() {
   const [status, setStatus] = useState<string | null>(null);
   const [aiOptions, setAiOptions] = useState<AiProviderOption[]>([]);
   const searchInputRef = useRef<HTMLInputElement>(null);
-  const { captures, contexts, counts, isLoading, refreshAll } = useLiteWorkspace(
-    { contextId: selectedContextId, search },
+  const captureListRef = useRef<HTMLDivElement>(null);
+  const { captures, captureTotal, contexts, counts, isLoading, refreshAll } = useLiteWorkspace(
+    { contextId: selectedContextId, search, page: capturePage },
     setStatus,
   );
   const {
@@ -59,6 +63,9 @@ export function LiteMainApp() {
   } = useSettingsCoordinator(liteDefaultSettings);
   const language = normalizeLanguage(settings.language);
   const selectedContext = contexts.find((context) => context.id === selectedContextId) ?? null;
+  const capturePageCount = Math.max(1, Math.ceil(captureTotal / capturePageSize));
+  const captureRangeStart = captureTotal === 0 ? 0 : (capturePage * capturePageSize) + 1;
+  const captureRangeEnd = captureTotal === 0 ? 0 : Math.min(captureRangeStart + captures.length - 1, captureTotal);
   const tr = useCallback(
     (english: string, variables?: Record<string, string | number>) => translate(language, english, variables),
     [language],
@@ -82,6 +89,14 @@ export function LiteMainApp() {
       : null);
   }, [captures]);
 
+  useEffect(() => {
+    if (capturePage >= capturePageCount) setCapturePage(capturePageCount - 1);
+  }, [capturePage, capturePageCount]);
+
+  useEffect(() => {
+    if (captureListRef.current) captureListRef.current.scrollTop = 0;
+  }, [capturePage]);
+
   useTauriEvent<string>("magic-document-opened", ({ payload }) => {
     setRequestedDocumentId(payload);
     setActiveView("documents");
@@ -97,7 +112,8 @@ export function LiteMainApp() {
       setIsNewContextOpen(false);
       setActiveView("captures");
       setSelectedContextId(context.id);
-      await refreshAll({ contextId: context.id, search });
+      setCapturePage(0);
+      await refreshAll({ contextId: context.id, search, page: 0 });
     } catch (error) {
       setStatus(String(error));
     } finally {
@@ -158,7 +174,8 @@ export function LiteMainApp() {
       setDetail(null);
       setSelectedContextId(null);
       setSearch("");
-      await refreshAll({ contextId: null, search: "" });
+      setCapturePage(0);
+      await refreshAll({ contextId: null, search: "", page: 0 });
     } catch (error) {
       setStatus(String(error));
     }
@@ -191,13 +208,17 @@ export function LiteMainApp() {
                   setMagicQuery(event.currentTarget.value);
                 } else {
                   setActiveView("captures");
+                  setCapturePage(0);
                   setSearch(event.currentTarget.value);
                 }
               }}
               placeholder={searchMode === "magic" ? tr("What are you looking for?") : tr("Find something you copied...")}
               aria-label={searchMode === "magic" ? tr("Magic Search") : tr("Search history")}
             />
-            {(searchMode === "magic" ? magicQuery : search) && <button type="button" onClick={() => searchMode === "magic" ? setMagicQuery("") : setSearch("")} aria-label={tr("Clear search")}><LiteIcon name="close" /></button>}
+            {(searchMode === "magic" ? magicQuery : search) && <button type="button" onClick={() => {
+              if (searchMode === "magic") setMagicQuery("");
+              else { setCapturePage(0); setSearch(""); }
+            }} aria-label={tr("Clear search")}><LiteIcon name="close" /></button>}
             {searchMode === "magic" && <button className="lite-search-submit" type="submit" disabled={!magicQuery.trim()} aria-label={tr("Ask ScryPuppy")}>
               <LiteIcon name="sparkles" size={13} /><span>{tr("Ask")}</span>
             </button>}
@@ -217,12 +238,12 @@ export function LiteMainApp() {
 
       <aside className="lite-sidebar">
         <nav aria-label={tr("Contexts")}>
-          <button className={activeView === "captures" && !selectedContextId ? "is-selected" : ""} onClick={() => { setActiveView("captures"); setSelectedContextId(null); }}>
+          <button className={activeView === "captures" && !selectedContextId ? "is-selected" : ""} onClick={() => { setActiveView("captures"); setCapturePage(0); setSelectedContextId(null); }}>
             <LiteIcon name="layers" /><span>{tr("Everything")}</span><small>{counts.all}</small>
           </button>
           <p>{tr("Contexts")}</p>
           {contexts.map((context) => (
-            <button key={context.id} className={activeView === "captures" && selectedContextId === context.id ? "is-selected" : ""} onClick={() => { setActiveView("captures"); setSelectedContextId(context.id); }}>
+            <button key={context.id} className={activeView === "captures" && selectedContextId === context.id ? "is-selected" : ""} onClick={() => { setActiveView("captures"); setCapturePage(0); setSelectedContextId(context.id); }}>
               <LiteIcon name="folder" /><span>{context.name}</span><small>{context.capture_count}</small>
             </button>
           ))}
@@ -280,9 +301,9 @@ export function LiteMainApp() {
           </button>}
         </header>
 
-        {status && <div className="lite-status"><LiteIcon name="info" /><span>{status}</span><button onClick={() => setStatus(null)}><LiteIcon name="close" /></button></div>}
+        {status && <div className="lite-status"><LiteIcon name="info" /><span>{tr(status)}</span><button onClick={() => setStatus(null)}><LiteIcon name="close" /></button></div>}
 
-        <div className={`lite-capture-list ${isLoading ? "is-loading" : ""}`} aria-live="polite">
+        <div ref={captureListRef} className="lite-capture-list" aria-busy={isLoading} aria-live="polite">
           {isLoading && captures.length === 0 ? (
             <LiteEmpty icon="loader" title={tr("Loading your history...")} />
           ) : captures.length === 0 ? (
@@ -302,7 +323,7 @@ export function LiteMainApp() {
               </button> : <span className="lite-capture-app">{appInitial(capture.source_app_name)}</span>}
               <div className="lite-capture-main">
                 <button className="lite-capture-content" onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => setStatus(String(error)))} title={tr("Copy")}>
-                  <strong>{compactContent(capture.content_text)}</strong>
+                  <strong>{compactContent(translateGeneratedContent(language, capture.content_text))}</strong>
                   <small>{formatRelativeDate(capture.captured_at, language)}</small>
                 </button>
                 {capture.contexts.length > 0 && <div className="lite-capture-categories" title={capture.contexts.map((context) => context.name).join(", ")}>
@@ -318,6 +339,18 @@ export function LiteMainApp() {
             </article>;
           })}
         </div>
+        {captureTotal > capturePageSize && <nav className="lite-pagination" aria-label={tr("Pagination")}>
+          <span>{tr("Showing {start}-{end} of {total}", { start: captureRangeStart, end: captureRangeEnd, total: captureTotal })}</span>
+          <div>
+            <button className="is-previous" type="button" disabled={capturePage === 0 || isLoading} onClick={() => setCapturePage((page) => Math.max(0, page - 1))} aria-label={tr("Previous page")} title={tr("Previous page")}>
+              <LiteIcon name="chevron" size={15} />
+            </button>
+            <strong aria-live="polite">{tr("Page {page} of {pages}", { page: capturePage + 1, pages: capturePageCount })}</strong>
+            <button type="button" disabled={capturePage + 1 >= capturePageCount || isLoading} onClick={() => setCapturePage((page) => Math.min(capturePageCount - 1, page + 1))} aria-label={tr("Next page")} title={tr("Next page")}>
+              <LiteIcon name="chevron" size={15} />
+            </button>
+          </div>
+        </nav>}
       </section>}
 
       {detail && <CaptureDetailsDialog capture={detail} contexts={contexts} language={language} onClose={() => setDetail(null)} onChanged={async () => {
@@ -333,7 +366,7 @@ export function LiteMainApp() {
         onClose={() => setIsContextPickerOpen(false)}
         onAdded={async (count) => {
           setStatus(tr("Added {count} items to {name}.", { count, name: selectedContext.name }));
-          await refreshAll({ contextId: selectedContext.id, search });
+          await refreshAll({ contextId: selectedContext.id, search, page: capturePage });
         }}
         onError={setStatus}
       />}

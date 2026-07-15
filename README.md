@@ -17,7 +17,7 @@ Capture useful information, keep its source, organize it into Contexts, and turn
 </div>
 
 > [!NOTE]
-> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.3`.
+> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.4`.
 
 ![ScryPuppy main workspace](docs/screenshots/scrypuppy-main.png)
 

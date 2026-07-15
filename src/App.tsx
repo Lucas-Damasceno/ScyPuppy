@@ -8,7 +8,7 @@ import { OnboardingTutorial } from "./components/OnboardingTutorial";
 import { BrandMark } from "./components/BrandMark";
 import { AiControls, ClipboardCaptureControls, QuickContextControls, SettingsSaveFeedback, StartupAndShortcutsControls } from "./components/SettingsControls";
 import { useSettingsCoordinator } from "./hooks/useSettingsCoordinator";
-import { normalizeLanguage, translate, type AppLanguage } from "./i18n";
+import { normalizeLanguage, translate, translateGeneratedContent, type AppLanguage } from "./i18n";
 import { LiteMagicPalette, LiteMainApp } from "./LiteApp";
 import { appDefaultSettings } from "./config/defaultSettings";
 import type {
@@ -21,6 +21,7 @@ import "./App.css";
 
 const inboxId = "inbox";
 const contentBaseId = "content-base";
+const pastePageSize = 10;
 
 type ConfirmationOptions = {
   title: string;
@@ -45,19 +46,45 @@ function App() {
 function PastePalette({ preview = false }: { preview?: boolean }) {
   const [items, setItems] = useState<Capture[]>([]);
   const [search, setSearch] = useState("");
+  const [page, setPage] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [isLoading, setIsLoading] = useState(true);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [isPasting, setIsPasting] = useState(false);
   const [language, setLanguage] = useState<AppLanguage>("en");
   const searchRef = useRef<HTMLInputElement>(null);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const requestIdRef = useRef(0);
   const tr = (english: string, variables?: Record<string, string | number>) => translate(language, english, variables);
+  const pageCount = Math.max(1, Math.ceil(total / pastePageSize));
+  const rangeStart = total === 0 ? 0 : (page * pastePageSize) + 1;
+  const rangeEnd = total === 0 ? 0 : Math.min(rangeStart + items.length - 1, total);
 
-  const loadItems = useCallback(async (query = search) => {
-    const nextItems = preview
-      ? pastePreviewItems.filter((item) => item.content_text.toLowerCase().includes(query.toLowerCase()))
-      : await api.listPasteItems(query);
-    setItems(nextItems);
-    setSelectedIndex((current) => Math.min(current, Math.max(0, nextItems.length - 1)));
-  }, [preview, search]);
+  const loadItems = useCallback(async (query: string, pageIndex: number) => {
+    const requestId = ++requestIdRef.current;
+    setIsLoading(true);
+    try {
+      const nextPage = preview
+        ? (() => {
+            const matches = pastePreviewItems.filter((item) =>
+              item.content_text.toLowerCase().includes(query.toLowerCase()),
+            );
+            const offset = pageIndex * pastePageSize;
+            return { items: matches.slice(offset, offset + pastePageSize), total: matches.length };
+          })()
+        : await api.listPasteItems(query, pageIndex, pastePageSize);
+      if (requestId !== requestIdRef.current) return;
+      setItems(nextPage.items);
+      setTotal(nextPage.total);
+      setSelectedIndex((current) => Math.min(current, Math.max(0, nextPage.items.length - 1)));
+    } catch {
+      if (requestId !== requestIdRef.current) return;
+      setItems([]);
+      setTotal(0);
+    } finally {
+      if (requestId === requestIdRef.current) setIsLoading(false);
+    }
+  }, [preview]);
 
   const chooseItem = useCallback(async (item: Capture | undefined) => {
     if (!item || isPasting || preview) return;
@@ -82,15 +109,25 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
   }, [language]);
 
   useEffect(() => {
-    const timeout = window.setTimeout(() => loadItems().catch(() => setItems([])), 90);
+    const timeout = window.setTimeout(() => void loadItems(search, page), 90);
     return () => window.clearTimeout(timeout);
-  }, [loadItems]);
+  }, [loadItems, page, search]);
+
+  useEffect(() => {
+    if (page >= pageCount) setPage(pageCount - 1);
+  }, [page, pageCount]);
+
+  useEffect(() => {
+    resultsRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [page, search]);
 
   useEffect(() => {
     const unlisteners: Array<() => void> = [];
     listen("paste-palette-opened", () => {
+      setSearch("");
+      setPage(0);
       setSelectedIndex(0);
-      loadItems().catch(() => setItems([]));
+      void loadItems("", 0);
       window.setTimeout(() => searchRef.current?.focus(), 0);
     }).then((unlisten) => unlisteners.push(unlisten));
     if (!preview) getCurrentWindow().onFocusChanged(({ payload }) => {
@@ -107,6 +144,26 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
         setSelectedIndex((current) => Math.max(current - 1, 0));
+      } else if (event.key === "PageDown" && page < pageCount - 1) {
+        event.preventDefault();
+        setPage((current) => current + 1);
+        setSelectedIndex(0);
+      } else if (event.key === "PageUp" && page > 0) {
+        event.preventDefault();
+        setPage((current) => current - 1);
+        setSelectedIndex(0);
+      } else if (event.key === "ArrowRight" && pageCount > 1) {
+        event.preventDefault();
+        if (page < pageCount - 1) {
+          setPage((current) => current + 1);
+          setSelectedIndex(0);
+        }
+      } else if (event.key === "ArrowLeft" && pageCount > 1) {
+        event.preventDefault();
+        if (page > 0) {
+          setPage((current) => current - 1);
+          setSelectedIndex(0);
+        }
       } else if (event.key === "Enter") {
         event.preventDefault();
         chooseItem(items[selectedIndex]);
@@ -121,7 +178,7 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [chooseItem, items, selectedIndex]);
+  }, [chooseItem, items, page, pageCount, selectedIndex]);
 
   useEffect(() => {
     document.querySelector(".paste-result.is-selected")?.scrollIntoView({ block: "nearest" });
@@ -137,7 +194,7 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
             <input
               ref={searchRef}
               value={search}
-              onChange={(event) => { setSearch(event.currentTarget.value); setSelectedIndex(0); }}
+              onChange={(event) => { setSearch(event.currentTarget.value); setPage(0); setSelectedIndex(0); }}
               placeholder={tr("Search history...")}
               aria-label={tr("Search history")}
               autoComplete="off"
@@ -147,8 +204,8 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
           <kbd>Esc</kbd>
         </header>
 
-        <div className="paste-results" role="listbox" aria-label={tr("Recent items")}>
-          {items.length === 0 ? (
+        <div ref={resultsRef} className="paste-results" role="listbox" aria-label={tr("Recent items")} aria-busy={isLoading}>
+          {!isLoading && items.length === 0 ? (
             <div className="paste-empty"><Icon name="copy" size={22} /><strong>{tr("No items found")}</strong><span>{tr("Try another search.")}</span></div>
           ) : items.map((item, index) => {
             const imageAsset = item.assets.find((asset) => ["clipboard_image", "imported_image"].includes(asset.kind) && asset.path);
@@ -160,16 +217,16 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
                 aria-selected={index === selectedIndex}
                 onMouseEnter={() => setSelectedIndex(index)}
                 onClick={() => chooseItem(item)}
-                disabled={isPasting}
+                disabled={isPasting || isLoading}
               >
-                <span className="paste-result-index">{index < 9 ? index + 1 : ""}</span>
+                <span className="paste-result-index">{index + 1}</span>
                 {imageAsset?.path ? (
                   <img className="paste-result-image" src={convertFileSrc(imageAsset.path)} alt="" />
                 ) : (
                   <span className="paste-result-app">{appInitial(item.source_app_name)}</span>
                 )}
                 <span className="paste-result-copy">
-                  <strong>{item.content_text.replace(/\s+/g, " ").trim()}</strong>
+                  <strong>{translateGeneratedContent(language, item.content_text).replace(/\s+/g, " ").trim()}</strong>
                   <span>{item.source_app_name ?? tr("Unknown application")} · {formatListDate(item.captured_at)}</span>
                 </span>
                 <span className="paste-result-kind">{item.kind === "reference" ? tr("Reference") : tr("Capture")}</span>
@@ -178,10 +235,40 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
           })}
         </div>
 
-        <footer className="paste-palette-footer">
-          <span><kbd>↑</kbd><kbd>↓</kbd> {tr("navigate")}</span>
-          <span><kbd>Enter</kbd> {tr("paste")}</span>
-          <span><kbd>Ctrl</kbd><kbd>1–9</kbd> {tr("quick access")}</span>
+        <footer className={`paste-palette-footer ${pageCount > 1 ? "has-pagination" : ""}`}>
+          {pageCount > 1 ? (
+            <nav className="paste-pagination" aria-label={tr("Pagination")}>
+              <button
+                type="button"
+                className="is-previous"
+                disabled={page === 0 || isLoading}
+                onClick={() => { setPage((current) => current - 1); setSelectedIndex(0); }}
+                aria-label={tr("Previous page")}
+                title={tr("Previous page")}
+              >
+                <Icon name="chevron" size={12} />
+              </button>
+              <span aria-label={tr("Showing {start}-{end} of {total}", { start: rangeStart, end: rangeEnd, total })}>
+                {rangeStart}-{rangeEnd} / {total}
+              </span>
+              <button
+                type="button"
+                disabled={page >= pageCount - 1 || isLoading}
+                onClick={() => { setPage((current) => current + 1); setSelectedIndex(0); }}
+                aria-label={tr("Next page")}
+                title={tr("Next page")}
+              >
+                <Icon name="chevron" size={12} />
+              </button>
+            </nav>
+          ) : null}
+          <div className="paste-shortcuts">
+            <span><kbd>↑</kbd><kbd>↓</kbd> {tr("navigate")}</span>
+            <span><kbd>Enter</kbd> {tr("paste")}</span>
+            {pageCount > 1
+              ? <span><kbd>←</kbd><kbd>→</kbd> {tr("pages")}</span>
+              : <span><kbd>Ctrl</kbd><kbd>1–9</kbd> {tr("quick access")}</span>}
+          </div>
         </footer>
       </section>
     </main>
@@ -190,8 +277,8 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
 
 const pastePreviewItems = [
   { id: "preview-1", content_text: "https://github.com/Lucas-Damasceno/DamascDoc", source_app_name: "Google Chrome", captured_at: new Date().toISOString(), kind: "capture", assets: [] },
-  { id: "preview-2", content_text: "Refatorar o fluxo de captura e revisar as migrations do banco", source_app_name: "Visual Studio Code", captured_at: new Date(Date.now() - 420_000).toISOString(), kind: "capture", assets: [] },
-  { id: "preview-3", content_text: "Ctrl + Shift + V abre o histórico rápido do ClipScry", source_app_name: "ClipScry", captured_at: new Date(Date.now() - 3_600_000).toISOString(), kind: "reference", assets: [] },
+  { id: "preview-2", content_text: "Refactor the capture flow and review the database migrations", source_app_name: "Visual Studio Code", captured_at: new Date(Date.now() - 420_000).toISOString(), kind: "capture", assets: [] },
+  { id: "preview-3", content_text: "Ctrl + Shift + V opens ScryPuppy's quick history", source_app_name: "ScryPuppy", captured_at: new Date(Date.now() - 3_600_000).toISOString(), kind: "reference", assets: [] },
 ] as unknown as Capture[];
 
 const defaultSettings = appDefaultSettings;
@@ -327,7 +414,7 @@ function QuickContextPanel() {
         <div className="quick-context-body">
           {settings.quick_context_show_preview && <div className="quick-context-preview">
             <span className="quick-context-preview-icon"><Icon name={isImageCapture ? "image" : "copy"} size={15} /></span>
-            <span className="quick-context-preview-copy"><strong>{tr(isImageCapture ? "Image capture" : "Capture")}</strong><small>{capture.content_text.replace(/^\[|\]$/g, "")}</small></span>
+            <span className="quick-context-preview-copy"><strong>{tr(isImageCapture ? "Image capture" : "Capture")}</strong><small>{translateGeneratedContent(language, capture.content_text).replace(/^\[|\]$/g, "")}</small></span>
           </div>}
           <div className="quick-context-search"><Icon name="search" size={14} /><input value={search} onChange={(event) => { setSearch(event.currentTarget.value); setActiveOption(0); }} onKeyDown={handleSearchKeyDown} onFocus={() => setIsSearching(true)} onBlur={() => setIsSearching(false)} placeholder={tr("Search or create a context")} aria-label={tr("Search contexts")} aria-controls="quick-context-options" aria-expanded={Boolean(search.trim() || isSearching)} autoComplete="off" spellCheck={false} />{search && <button onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearch(""); setActiveOption(0); }} aria-label={tr("Clear search")}><Icon name="close" size={12} /></button>}</div>
           <div className="quick-context-section-label"><span>{tr(normalizedSearch ? "Available contexts" : settings.quick_context_show_recent ? "Recent contexts" : "Contexts")}</span>{capture.contexts.length > 0 && <small>{capture.contexts.length} {tr("Assigned contexts").toLowerCase()}</small>}</div>
@@ -339,7 +426,7 @@ function QuickContextPanel() {
             {canCreate && <button onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveOption(visibleContexts.length)} onClick={createInline} disabled={Boolean(savingContextId)} className={`quick-context-create ${activeOption === visibleContexts.length ? "is-active" : ""}`} role="option" aria-selected={false}><span className="quick-context-option-name"><Icon name="plus" size={13} /><span>{tr("Create context")} <strong>{search.trim()}</strong></span></span><Icon name="arrow" size={13} /></button>}
             {!optionCount && <p className="quick-context-empty">{tr("No matching contexts")}</p>}
           </div>
-          {error && <p className="quick-context-error" role="alert"><Icon name="info" size={12} />{error}</p>}
+          {error && <p className="quick-context-error" role="alert"><Icon name="info" size={12} />{tr(error)}</p>}
         </div>
         <footer><span className="quick-context-save-state" aria-live="polite">{savingContextId ? <Icon name="loader" size={12} /> : <Icon name="check" size={12} />} {tr(savingContextId ? "Saving..." : "Saved locally")}</span><button onClick={() => api.closeQuickContext()} disabled={Boolean(savingContextId)}>{tr("Done")}</button></footer>
       </section>
@@ -1178,7 +1265,7 @@ function MainApp() {
                     <time>{formatListDate(capture.captured_at)}</time>
                   </div>
                   <p className="capture-window">{capture.window_title ?? tr("Untitled window")}</p>
-                  <p className="capture-excerpt">{capture.content_text}</p>
+                  <p className="capture-excerpt">{translateGeneratedContent(language, capture.content_text)}</p>
                   <div className="capture-row-footer">
                     <span>{capture.contexts.map((context) => context.name).join(", ") || (capture.kind === "reference" ? tr("Content Base") : "Inbox")}</span>
                     {capture.kind === "reference" && <code>{tr("reference")}</code>}
@@ -1266,7 +1353,7 @@ function MainApp() {
                       <Icon name="copy" size={14} /> {tr("Copy")}
                     </button>
                   </div>
-                  <pre className="captured-content">{selectedCapture.content_text}</pre>
+                  <pre className="captured-content">{translateGeneratedContent(language, selectedCapture.content_text)}</pre>
                   {selectedCapture.tags.length > 0 && (
                     <div className="tag-list">
                       {selectedCapture.tags.map((tag) => <code key={tag}>{tr(tag)}</code>)}
@@ -1334,7 +1421,7 @@ function MainApp() {
                                 <span className="app-avatar small">{appInitial(item.app_name)}</span>
                                 <span>
                                   <strong>{item.app_name ?? tr("Unknown application")}</strong>
-                                  <small>{item.excerpt}</small>
+                                  <small>{translateGeneratedContent(language, item.excerpt)}</small>
                                 </span>
                                 <Icon name="chevron" size={14} />
                               </button>
@@ -1506,7 +1593,7 @@ function MainApp() {
                     <time>{formatDate(magicDocument.created_at)}</time>
                   </div>
                   {magicDocument.generation_warning && (
-                    <div className="magic-generation-warning"><Icon name="info" size={15} />{magicDocument.generation_warning}</div>
+                    <div className="magic-generation-warning"><Icon name="info" size={15} />{tr(magicDocument.generation_warning)}</div>
                   )}
                   <div className={`magic-answer-card is-${magicDocument.response_mode}`}>
                     <button className="quiet-button magic-answer-copy" onClick={() => api.copyTextToClipboard(magicDocument.markdown).catch((error) => setStatus(String(error)))}><Icon name="copy" size={13} /> {tr("Copy")}</button>
@@ -1524,7 +1611,7 @@ function MainApp() {
                     <div className="magic-evidence-grid">
                       {magicDocument.evidence.slice(0, magicDocument.response_mode === "direct" ? 1 : undefined).map((item, index) => (
                         <button key={item.capture_id} onClick={() => { setIsMagicOpen(false); openEvidence(item.capture_id); }}>
-                          <span>{index + 1}</span><div><strong>{item.app_name ?? tr("Capture")}</strong><small>{item.excerpt}</small></div><Icon name="chevron" size={13} />
+                          <span>{index + 1}</span><div><strong>{item.app_name ?? tr("Capture")}</strong><small>{translateGeneratedContent(language, item.excerpt)}</small></div><Icon name="chevron" size={13} />
                         </button>
                       ))}
                     </div>
@@ -1674,12 +1761,12 @@ function OrganizeContextsDialog({ language, days, useAi, working, result, contex
           </div>
           <p className="ai-disclosure organize-safety-note">{tr("ClipScry will analyze local identifiers and relationships to suggest context associations. No capture will be deleted or removed from an existing context.")}</p>
         </section> : <section className="organize-review">
-          <div className="organize-summary"><strong>{result.scanned_count} {tr("items analyzed")}</strong><span>{result.contextualized_count} {tr("already have contexts")} · {result.unmatched_capture_ids.length} {tr("uncertain or unmatched")}</span>{result.ai_message && <p>{result.ai_message}</p>}</div>
+          <div className="organize-summary"><strong>{result.scanned_count} {tr("items analyzed")}</strong><span>{result.contextualized_count} {tr("already have contexts")} · {result.unmatched_capture_ids.length} {tr("uncertain or unmatched")}</span>{result.ai_message && <p>{tr(result.ai_message)}</p>}</div>
           {result.suggestions.map((suggestion) => <article className="suggestion-card" key={suggestion.id}>
             <header><input type="checkbox" checked={selectedIds.has(suggestion.id)} onChange={(event) => onToggle(suggestion.id, event.currentTarget.checked)} /><div><input value={suggestion.name} disabled={Boolean(suggestion.existing_context_id)} onChange={(event) => onUpdate(suggestion.id, { name: event.currentTarget.value })} aria-label={tr("Suggested context name")} /><span>{suggestion.existing_context_id ? tr("Existing context") : tr("New context")} · {Math.round(suggestion.confidence * 100)}%</span></div></header>
             <p>{suggestion.reason}</p>
             <label><span>{tr("Apply to")}</span><select value={suggestion.existing_context_id ?? ""} onChange={(event) => onUpdate(suggestion.id, { existing_context_id: event.currentTarget.value || null, name: contexts.find((context) => context.id === event.currentTarget.value)?.name ?? suggestion.name })}><option value="">{tr("Create a new context")}</option>{contexts.map((context) => <option value={context.id} key={context.id}>{context.name}</option>)}</select></label>
-            <ul>{suggestion.capture_ids.map((captureId) => { const item = captureMap[captureId]; return <li key={captureId}><button onClick={() => onOpenCapture(captureId)}><strong>{item?.source_app_name ?? tr("Capture")}</strong><span>{item?.content_text.replace(/\s+/g, " ").slice(0, 100) ?? captureId}</span></button><button aria-label={tr("Remove capture from suggestion")} onClick={() => onRemoveCapture(suggestion.id, captureId)}>×</button></li>; })}</ul>
+            <ul>{suggestion.capture_ids.map((captureId) => { const item = captureMap[captureId]; return <li key={captureId}><button onClick={() => onOpenCapture(captureId)}><strong>{item?.source_app_name ?? tr("Capture")}</strong><span>{item ? translateGeneratedContent(language, item.content_text).replace(/\s+/g, " ").slice(0, 100) : captureId}</span></button><button aria-label={tr("Remove capture from suggestion")} onClick={() => onRemoveCapture(suggestion.id, captureId)}>×</button></li>; })}</ul>
           </article>)}
           {result.suggestions.length === 0 && <p className="muted-copy">{tr("No useful context suggestions were found. Your captures were left unchanged.")}</p>}
         </section>}
@@ -1814,7 +1901,7 @@ function AssetPreview({ asset, onPreview, language }: { asset: CaptureAsset; onP
         </button>
       )}
       {asset.path && <code>{asset.path}</code>}
-      {asset.error && <span>{asset.error}</span>}
+      {asset.error && <span>{translate(language, asset.error)}</span>}
     </li>
   );
 }

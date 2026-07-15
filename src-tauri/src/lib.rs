@@ -230,6 +230,12 @@ struct CaptureDto {
     contexts: Vec<ContextAssignmentDto>,
 }
 
+#[derive(Debug, Serialize)]
+struct CapturePageDto {
+    items: Vec<CaptureDto>,
+    total: usize,
+}
+
 #[derive(Debug, Deserialize)]
 struct CaptureFilter {
     context_id: Option<String>,
@@ -512,7 +518,7 @@ impl ClipboardPayload {
             ClipboardPayload::Text(text) => text.clone(),
             ClipboardPayload::Image(image) => {
                 format!(
-                    "[Imagem copiada do clipboard: {}x{}]",
+                    "[Image copied from clipboard: {}x{}]",
                     image.width, image.height
                 )
             }
@@ -567,46 +573,47 @@ async fn copy_capture_to_clipboard(state: State<'_, AppState>, id: String) -> Re
         .map_err(err)?
 }
 
-#[tauri::command]
-fn list_captures(
-    state: State<AppState>,
-    filter: Option<CaptureFilter>,
-) -> Result<Vec<CaptureDto>, String> {
-    let conn = open_conn(&state)?;
-    let filter = filter.unwrap_or(CaptureFilter {
+fn default_capture_filter() -> CaptureFilter {
+    CaptureFilter {
         context_id: None,
         search: None,
         tag: None,
         limit: None,
         offset: None,
-    });
-    let limit = filter.limit.unwrap_or(200).clamp(1, 500);
-    let offset = filter.offset.unwrap_or(0);
+    }
+}
 
-    let mut sql = String::from(
-        "SELECT c.id, c.content_text, c.captured_at,
-                c.source_app_name, c.source_app_id, c.source_process_id,
-                c.source_process_path, c.window_title, c.window_id, c.platform,
-                c.metadata_json, c.capture_kind
-         FROM captures c
-         LEFT JOIN capture_ocr o ON o.capture_id = c.id",
-    );
+struct CaptureQueryParts {
+    where_clause: String,
+    args: Vec<String>,
+    search_pattern: Option<String>,
+}
+
+fn capture_query_parts(filter: &CaptureFilter) -> CaptureQueryParts {
     let mut args = Vec::new();
     let mut where_parts = Vec::new();
 
-    if let Some(context_id) = filter.context_id.filter(|value| !value.trim().is_empty()) {
+    if let Some(context_id) = filter
+        .context_id
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         if context_id == INBOX_CONTEXT_ID {
             where_parts.push("c.capture_kind <> 'reference' AND NOT EXISTS (SELECT 1 FROM capture_contexts icc WHERE icc.capture_id = c.id)".to_string());
         } else if context_id == CONTENT_BASE_CONTEXT_ID {
             where_parts.push("c.capture_kind = 'reference'".to_string());
         } else {
             where_parts.push("EXISTS (SELECT 1 FROM capture_contexts fcc WHERE fcc.capture_id = c.id AND fcc.context_id = ?)".to_string());
-            args.push(context_id);
+            args.push(context_id.clone());
         }
     }
 
-    let mut search_for_order = None;
-    if let Some(search) = filter.search.filter(|value| !value.trim().is_empty()) {
+    let mut search_pattern = None;
+    if let Some(search) = filter
+        .search
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
         where_parts.push(
             "(c.content_text LIKE ?
               OR o.text LIKE ?
@@ -623,23 +630,48 @@ fn list_captures(
         for _ in 0..7 {
             args.push(pattern.clone());
         }
-        search_for_order = Some(pattern);
+        search_pattern = Some(pattern);
     }
 
-    if let Some(tag) = filter.tag.filter(|value| !value.trim().is_empty()) {
+    if let Some(tag) = filter.tag.as_ref().filter(|value| !value.trim().is_empty()) {
         where_parts.push(
             "EXISTS (SELECT 1 FROM capture_tags ct WHERE ct.capture_id = c.id AND ct.tag = ?)"
                 .to_string(),
         );
-        args.push(tag);
+        args.push(tag.clone());
     }
 
-    if !where_parts.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(&where_parts.join(" AND "));
+    CaptureQueryParts {
+        where_clause: if where_parts.is_empty() {
+            String::new()
+        } else {
+            format!(" WHERE {}", where_parts.join(" AND "))
+        },
+        args,
+        search_pattern,
     }
+}
 
-    if let Some(pattern) = search_for_order {
+fn list_captures_from_conn(
+    conn: &Connection,
+    filter: &CaptureFilter,
+) -> Result<Vec<CaptureDto>, String> {
+    let limit = filter.limit.unwrap_or(200).clamp(1, 500);
+    let offset = filter.offset.unwrap_or(0);
+
+    let mut sql = String::from(
+        "SELECT c.id, c.content_text, c.captured_at,
+                c.source_app_name, c.source_app_id, c.source_process_id,
+                c.source_process_path, c.window_title, c.window_id, c.platform,
+                c.metadata_json, c.capture_kind
+         FROM captures c
+         LEFT JOIN capture_ocr o ON o.capture_id = c.id",
+    );
+    let parts = capture_query_parts(filter);
+    sql.push_str(&parts.where_clause);
+    let mut args = parts.args;
+
+    if let Some(pattern) = parts.search_pattern {
         sql.push_str(
             " ORDER BY CASE
                 WHEN lower(c.content_text) LIKE lower(?) THEN 5
@@ -673,6 +705,46 @@ fn list_captures(
     hydrate_captures(&conn, &mut captures)?;
 
     Ok(captures)
+}
+
+fn count_captures_from_conn(conn: &Connection, filter: &CaptureFilter) -> Result<usize, String> {
+    let parts = capture_query_parts(filter);
+    let sql = format!(
+        "SELECT COUNT(DISTINCT c.id)
+         FROM captures c
+         LEFT JOIN capture_ocr o ON o.capture_id = c.id{}",
+        parts.where_clause
+    );
+    let arg_refs: Vec<&dyn rusqlite::ToSql> = parts
+        .args
+        .iter()
+        .map(|value| value as &dyn rusqlite::ToSql)
+        .collect();
+    let count = conn
+        .query_row(&sql, &arg_refs[..], |row| row.get::<_, i64>(0))
+        .map_err(err)?;
+    Ok(count.max(0) as usize)
+}
+
+#[tauri::command]
+fn list_captures(
+    state: State<AppState>,
+    filter: Option<CaptureFilter>,
+) -> Result<Vec<CaptureDto>, String> {
+    let conn = open_conn(&state)?;
+    list_captures_from_conn(&conn, &filter.unwrap_or_else(default_capture_filter))
+}
+
+#[tauri::command]
+fn list_capture_page(
+    state: State<AppState>,
+    filter: Option<CaptureFilter>,
+) -> Result<CapturePageDto, String> {
+    let conn = open_conn(&state)?;
+    let filter = filter.unwrap_or_else(default_capture_filter);
+    let total = count_captures_from_conn(&conn, &filter)?;
+    let items = list_captures_from_conn(&conn, &filter)?;
+    Ok(CapturePageDto { items, total })
 }
 
 #[tauri::command]
@@ -4527,7 +4599,7 @@ fn import_file_capture(
         .and_then(|value| value.to_str())
         .unwrap_or("arquivo");
     let content_text = if is_image {
-        format!("Imagem salva pelo Explorer: {file_name}")
+        format!("Image saved from Explorer: {file_name}")
     } else {
         String::from_utf8(bytes.clone())
             .map_err(|_| "O arquivo de texto precisa estar codificado em UTF-8.".to_string())?
@@ -5527,7 +5599,7 @@ fn finish_ocr_job(
             ).map_err(err)?;
         }
     }
-    Ok(())
+    transaction.commit().map_err(err)
 }
 
 fn index_ocr_text(conn: &Connection, capture_id: &str, text: &str) -> Result<(), String> {
@@ -6147,7 +6219,7 @@ fn read_clipboard_after_copy(marker: &str) -> Result<ClipboardPayload, String> {
         }
     }
 
-    Err("O app focado nao atualizou o clipboard depois do atalho. Tente soltar as teclas e repetir a captura.".into())
+    Err("The focused app did not update the clipboard after the shortcut. Release the keys and try capturing again.".into())
 }
 
 fn mark_current_clipboard_sequence(state: &AppState) {
@@ -6915,6 +6987,7 @@ pub fn run() {
             copy_text_to_clipboard,
             copy_capture_to_clipboard,
             list_captures,
+            list_capture_page,
             get_capture,
             delete_capture,
             list_contexts,
@@ -7228,6 +7301,127 @@ mod tests {
     }
 
     #[test]
+    fn capture_pages_filter_before_counting_and_limiting() {
+        let conn = duplicate_test_connection();
+        let timestamp = now();
+        for index in 0..65 {
+            let text = if index % 10 == 0 {
+                format!("needle capture {index}")
+            } else {
+                format!("ordinary capture {index}")
+            };
+            insert_duplicate_test_capture(
+                &conn,
+                &text,
+                &timestamp,
+                CaptureOrigin::ClipboardMonitor,
+            );
+        }
+
+        let first_page = CaptureFilter {
+            context_id: None,
+            search: None,
+            tag: None,
+            limit: Some(50),
+            offset: Some(0),
+        };
+        assert_eq!(
+            count_captures_from_conn(&conn, &first_page).expect("capture count should load"),
+            65
+        );
+        assert_eq!(
+            list_captures_from_conn(&conn, &first_page)
+                .expect("first page should load")
+                .len(),
+            50
+        );
+
+        let second_page = CaptureFilter {
+            offset: Some(50),
+            ..first_page
+        };
+        assert_eq!(
+            list_captures_from_conn(&conn, &second_page)
+                .expect("second page should load")
+                .len(),
+            15
+        );
+
+        let search_page = CaptureFilter {
+            context_id: None,
+            search: Some("needle".into()),
+            tag: None,
+            limit: Some(10),
+            offset: Some(0),
+        };
+        assert_eq!(
+            count_captures_from_conn(&conn, &search_page)
+                .expect("filtered capture count should load"),
+            7
+        );
+        assert_eq!(
+            list_captures_from_conn(&conn, &search_page)
+                .expect("filtered capture page should load")
+                .len(),
+            7
+        );
+    }
+
+    #[test]
+    fn finishing_ocr_job_commits_terminal_state() {
+        let mut conn = duplicate_test_connection();
+        let timestamp = now();
+        let capture_id = insert_duplicate_test_capture(
+            &conn,
+            "Image capture",
+            &timestamp,
+            CaptureOrigin::ExplicitHotkey,
+        );
+        let asset_id = Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO capture_assets (id, capture_id, kind, path, status, error, created_at)
+             VALUES (?, ?, 'clipboard_image', 'capture.png', 'saved', NULL, ?)",
+            params![asset_id, capture_id, timestamp],
+        )
+        .expect("test asset should insert");
+        conn.execute(
+            "INSERT INTO capture_ocr (capture_id, status, text, error, updated_at)
+             VALUES (?, 'running', NULL, NULL, ?)",
+            params![capture_id, timestamp],
+        )
+        .expect("test OCR state should insert");
+        conn.execute(
+            "INSERT INTO ocr_jobs (
+                capture_id, asset_id, status, attempts, queued_at, started_at
+             ) VALUES (?, ?, 'running', 1, ?, ?)",
+            params![capture_id, asset_id, timestamp, timestamp],
+        )
+        .expect("test OCR job should insert");
+
+        finish_ocr_job(&mut conn, &capture_id, Ok("recognized text".into()))
+            .expect("OCR result should persist");
+
+        let job_status: String = conn
+            .query_row(
+                "SELECT status FROM ocr_jobs WHERE capture_id = ?",
+                [&capture_id],
+                |row| row.get(0),
+            )
+            .expect("OCR job should remain available");
+        let (ocr_status, ocr_text): (String, Option<String>) = conn
+            .query_row(
+                "SELECT status, text FROM capture_ocr WHERE capture_id = ?",
+                [&capture_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("OCR state should remain available");
+
+        assert_eq!(job_status, "done");
+        assert_eq!(ocr_status, "done");
+        assert_eq!(ocr_text.as_deref(), Some("recognized text"));
+    }
+
+    #[test]
     fn screenshot_policy_is_independent_by_origin() {
         let mut settings = test_settings();
         assert!(screenshot_enabled(
@@ -7360,7 +7554,7 @@ mod tests {
         text: &str,
         captured_at: &str,
         origin: CaptureOrigin,
-    ) {
+    ) -> String {
         let id = Uuid::new_v4().to_string();
         let metadata = json!({ "capture_origin": origin }).to_string();
         conn.execute(
@@ -7388,5 +7582,6 @@ mod tests {
             ],
         )
         .expect("test capture should insert");
+        id
     }
 }

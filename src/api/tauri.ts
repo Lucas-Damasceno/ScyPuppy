@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
-  AiProviderOption, ApplyContextSuggestion, ApplyContextSuggestionsResult, Capture, CaptureFilter, Category,
+  AiProviderOption, ApplyContextSuggestion, ApplyContextSuggestionsResult, Capture, CaptureFilter, CapturePage, Category,
   ChatAnswer, ChatRequest, Context, ContextAnalysisResult, LibraryCounts, MagicSearchDocument,
   MagicSearchListItem, MagicSearchPreview, MagicSearchRequest, Settings, TagDocument,
 } from "../types";
@@ -18,6 +18,7 @@ export async function loadWorkspace(filter: CaptureFilter) {
 export const listContexts = () => invoke<Context[]>("list_contexts");
 export const getLibraryCounts = () => invoke<LibraryCounts>("get_library_counts");
 export const listCaptures = (filter: CaptureFilter) => invoke<Capture[]>("list_captures", { filter });
+export const listCapturePage = (filter: CaptureFilter) => invoke<CapturePage>("list_capture_page", { filter });
 export const getSettings = () => invoke<Settings>("get_settings");
 export const getAiProviderOptions = () => invoke<AiProviderOption[]>("get_ai_provider_options");
 export const runCapture = () => invoke<Capture>("run_capture");
@@ -39,8 +40,12 @@ export const saveSettings = (settings: Settings) => invoke<Settings>("update_set
 export const askChat = (request: ChatRequest) => invoke<ChatAnswer>("ask_chat", { request });
 export const clearAiApiKey = () => invoke<Settings>("clear_ai_api_key");
 export const deleteAllData = () => invoke<void>("delete_all_data");
-export const listPasteItems = (search: string) => listCaptures({
-  context_id: null, search: search.trim() || null, tag: null, limit: 60, offset: 0,
+export const listPasteItems = (search: string, page: number, pageSize = 10) => listCapturePage({
+  context_id: null,
+  search: search.trim() || null,
+  tag: null,
+  limit: pageSize,
+  offset: Math.max(0, page) * pageSize,
 });
 export const pasteCapture = (id: string) => invoke<void>("paste_capture", { id });
 export const closePastePalette = () => invoke<void>("close_paste_palette");

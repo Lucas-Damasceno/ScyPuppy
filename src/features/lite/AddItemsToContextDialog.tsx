@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../../api/tauri";
-import { translate, type AppLanguage } from "../../i18n";
+import { translate, translateGeneratedContent, type AppLanguage } from "../../i18n";
 import type { Capture, Context } from "../../types";
 import { appInitial, compactContent, formatRelativeDate } from "./formatters";
 import { LiteIcon } from "./LiteIcon";
@@ -156,7 +156,7 @@ export function AddItemsToContextDialog({
             >
               <span className="lite-context-picker-app">{appInitial(capture.source_app_name)}</span>
               <span className="lite-context-picker-copy">
-                <strong>{capture.content_text.trim() ? compactContent(capture.content_text) : tr("Image capture")}</strong>
+                <strong>{capture.content_text.trim() ? compactContent(translateGeneratedContent(language, capture.content_text)) : tr("Image capture")}</strong>
                 <small>{capture.source_app_name ?? tr("Unknown application")} · {formatRelativeDate(capture.captured_at, language)}</small>
               </span>
               <span className="lite-context-picker-check"><LiteIcon name={isSelected ? "check" : "plus"} /></span>
