@@ -170,7 +170,7 @@ If ScryPuppy saves you time and you would like to support its development, you c
 
 <div align="center">
 
-[![Donate with PayPal](https://img.shields.io/badge/Donate-PayPal-00457C?logo=paypal&logoColor=white)](https://www.paypal.com/donate/?business=GNSP2TYN4L8NJ&no_recurring=0&item_name=If+ClipScry+saves+you+time%2C+consider+supporting+its+development.%20Every+donation+helps+keep+the+project+growing&currency_code=USD)
+[![Donate with PayPal](https://www.paypal.com/donate/?business=GNSP2TYN4L8NJ&no_recurring=0&item_name=If+Scrypuppy+saves+you+time%2C+consider+supporting+its+development.+Every+donation+helps+keep+the+project+growing%0A&currency_code=USD)
 
 </div>
 
