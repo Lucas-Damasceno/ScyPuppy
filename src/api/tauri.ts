@@ -1,9 +1,18 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke as tauriInvoke } from "@tauri-apps/api/core";
+import { normalizeCommandError } from "../appMessages";
 import type {
   AiProviderOption, ApplyContextSuggestion, ApplyContextSuggestionsResult, Capture, CaptureFilter, CapturePage, Category,
   ChatAnswer, ChatRequest, Context, ContextAnalysisResult, LibraryCounts, MagicSearchDocument,
   MagicSearchListItem, MagicSearchPreview, MagicSearchRequest, Settings, TagDocument,
 } from "../types";
+
+async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  try {
+    return await tauriInvoke<T>(command, args);
+  } catch (error) {
+    throw normalizeCommandError(error);
+  }
+}
 
 export async function loadWorkspace(filter: CaptureFilter) {
   const [contexts, categories, counts, captures] = await Promise.all([

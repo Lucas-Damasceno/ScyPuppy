@@ -29,7 +29,7 @@ function toCaptureFilter(query: LiteWorkspaceQuery): CaptureFilter {
   };
 }
 
-export function useLiteWorkspace(query: LiteWorkspaceQuery, onError: (message: string) => void) {
+export function useLiteWorkspace(query: LiteWorkspaceQuery, onError: (error: unknown) => void) {
   const [contexts, setContexts] = useState<Context[]>([]);
   const [captures, setCaptures] = useState<Capture[]>([]);
   const [captureTotal, setCaptureTotal] = useState(0);
@@ -49,7 +49,7 @@ export function useLiteWorkspace(query: LiteWorkspaceQuery, onError: (message: s
       setContexts(nextContexts);
       setCounts(nextCounts);
     } catch (error) {
-      if (mountedRef.current) errorHandlerRef.current(String(error));
+      if (mountedRef.current) errorHandlerRef.current(error);
     }
   }, []);
 
@@ -64,7 +64,7 @@ export function useLiteWorkspace(query: LiteWorkspaceQuery, onError: (message: s
         setCaptureTotal(page.total);
       }
     } catch (error) {
-      if (mountedRef.current && currentRequest === captureRequestId.current) errorHandlerRef.current(String(error));
+      if (mountedRef.current && currentRequest === captureRequestId.current) errorHandlerRef.current(error);
     } finally {
       if (mountedRef.current && currentRequest === captureRequestId.current) setIsLoading(false);
     }
@@ -109,7 +109,7 @@ export function useLiteWorkspace(query: LiteWorkspaceQuery, onError: (message: s
     });
   });
   useTauriEvent("capture-contexts-updated", () => void refreshAll());
-  useTauriEvent<CaptureErrorEvent>("capture-error", ({ payload }) => errorHandlerRef.current(payload.message));
+  useTauriEvent<CaptureErrorEvent>("capture-error", ({ payload }) => errorHandlerRef.current(payload.error));
   useTauriEvent("data-reset", () => void refreshAll());
 
   return { captures, captureTotal, contexts, counts, isLoading, refreshAll, refreshCaptures };

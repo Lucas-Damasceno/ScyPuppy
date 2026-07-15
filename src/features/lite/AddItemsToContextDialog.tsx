@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as api from "../../api/tauri";
-import { translate, translateGeneratedContent, type AppLanguage } from "../../i18n";
+import { formatAppError } from "../../appMessages";
+import { captureDisplayText, translate, type AppLanguage } from "../../i18n";
 import type { Capture, Context } from "../../types";
 import { appInitial, compactContent, formatRelativeDate } from "./formatters";
 import { LiteIcon } from "./LiteIcon";
@@ -60,7 +61,7 @@ export function AddItemsToContextDialog({
           !capture.contexts.some((assigned) => assigned.id === context.id),
         ));
       }).catch((error) => {
-        if (currentRequest === requestId.current) onError(String(error));
+        if (currentRequest === requestId.current) onError(formatAppError(error, tr));
       }).finally(() => {
         if (currentRequest === requestId.current) setIsLoading(false);
       });
@@ -86,7 +87,7 @@ export function AddItemsToContextDialog({
       await onAdded(addedCount);
       onClose();
     } catch (error) {
-      onError(String(error));
+      onError(formatAppError(error, tr));
       setIsSaving(false);
     }
   }
@@ -156,7 +157,7 @@ export function AddItemsToContextDialog({
             >
               <span className="lite-context-picker-app">{appInitial(capture.source_app_name)}</span>
               <span className="lite-context-picker-copy">
-                <strong>{capture.content_text.trim() ? compactContent(translateGeneratedContent(language, capture.content_text)) : tr("Image capture")}</strong>
+                <strong>{compactContent(captureDisplayText(language, capture)) || tr("Image capture")}</strong>
                 <small>{capture.source_app_name ?? tr("Unknown application")} · {formatRelativeDate(capture.captured_at, language)}</small>
               </span>
               <span className="lite-context-picker-check"><LiteIcon name={isSelected ? "check" : "plus"} /></span>

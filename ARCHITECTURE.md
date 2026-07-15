@@ -50,6 +50,7 @@ Each secondary window has a minimal capability file in `src-tauri/capabilities/`
 - `src/components/SettingsControls.tsx` — shared controls used by Settings and onboarding.
 - `src/hooks/useSettingsCoordinator.ts` — optimistic settings state and serialized persistence.
 - `src/api/tauri.ts` — typed frontend command boundary.
+- `src/appMessages.ts` — stable message-code catalog, Tauri error normalization, and legacy compatibility adapter.
 - `src/types.ts` — frontend domain contracts.
 - `src/i18n.ts` — English source strings and Brazilian Portuguese translations.
 - `src/dev/docsPreview.ts` — development-only, synthetic data bridge for reproducible documentation screenshots.
@@ -57,12 +58,30 @@ Each secondary window has a minimal capability file in `src-tauri/capabilities/`
 ### Native backend
 
 - `src-tauri/src/lib.rs` — commands, database initialization, migrations, capture orchestration, OCR scheduling, Windows integration, and window lifecycle.
+- `src-tauri/src/app_error.rs` — serializable command errors, non-error notices, safe parameters, and the isolated legacy domain-error bridge.
 - `src-tauri/src/clipboard_monitor.rs` — Windows message-only listener, sequence handling, queue, and persistence worker.
 - `src-tauri/src/ai.rs` — provider catalog and AI adapters.
 - `src-tauri/src/crypto.rs` — export encryption and hashing helpers.
 - `src-tauri/src/main.rs` — process entry point.
 
 The frontend deliberately uses React state and hooks rather than a second global state framework.
+
+## Error and localization contract
+
+Tauri commands return structured errors instead of localized prose:
+
+```json
+{
+  "code": "file.not_found",
+  "params": { "path": "C:\\missing.md" }
+}
+```
+
+The backend owns error classification and may include only display-safe parameters. Technical causes are logged without clipboard content, credentials, or other sensitive values and are never serialized to the webview. Non-error warnings use the same `code`/`params` shape through a distinct notice type.
+
+The frontend normalizes every `invoke` rejection in `src/api/tauri.ts`, resolves the code through `src/appMessages.ts`, and applies the selected locale only at the presentation boundary. UI copy in `src/i18n.ts` never attempts to identify backend errors by comparing sentences. A small legacy adapter recognizes errors emitted by older installed binaries and can be removed after that compatibility window ends.
+
+App-generated capture labels are derived from structured `metadata` such as `clipboard_image.width`, `clipboard_image.height`, and imported file metadata. `content_text` is reserved for user-authored or OCR content. A text parser remains only to display captures persisted by older versions.
 
 ## Capture pipeline
 
@@ -198,10 +217,12 @@ Artifacts are written under `src-tauri/target/release/bundle/`. See [docs/window
 
 When changing a command, setting, or domain contract:
 
-1. Update Rust DTOs and persistence.
-2. Update `src/types.ts`.
-3. Keep calls behind `src/api/tauri.ts`.
-4. Add English and Brazilian Portuguese UI strings.
-5. Review window-specific capabilities.
-6. Review privacy defaults and migration behavior.
-7. Run frontend compilation, Rust checks, and the production Windows build when applicable.
+1. Add or reuse a stable backend error/notice code; never return localized prose from a command.
+2. Include only display-safe structured parameters and keep technical causes in backend logs.
+3. Update Rust DTOs and persistence.
+4. Update `src/types.ts` and the catalog in `src/appMessages.ts`.
+5. Keep calls behind `src/api/tauri.ts`.
+6. Add English and Brazilian Portuguese UI strings.
+7. Review window-specific capabilities.
+8. Review privacy defaults and migration behavior.
+9. Run frontend compilation, frontend tests, Rust checks, Rust tests, and the production Windows build when applicable.

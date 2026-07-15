@@ -1,4 +1,5 @@
 import * as api from "../../api/tauri";
+import { formatAppError, type MessageParams } from "../../appMessages";
 import {
   AiControls,
   ClipboardCaptureControls,
@@ -16,7 +17,7 @@ type LiteSettingsDialogProps = {
   aiOptions: AiProviderOption[];
   language: AppLanguage;
   saveState: SettingsSaveState;
-  saveError: string | null;
+  saveError: unknown;
   onPatch: (patch: Partial<Settings>) => Promise<void>;
   onClearCredential: () => Promise<void>;
   onRetry: () => void;
@@ -27,7 +28,7 @@ type LiteSettingsDialogProps = {
 };
 
 export function LiteSettingsDialog({ settings, aiOptions, language, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
-  const tr = (english: string) => translate(language, english);
+  const tr = (english: string, variables?: MessageParams) => translate(language, english, variables);
   return (
     <div className="modal-backdrop lite-modal-backdrop lite-settings-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
       <section className="settings-modal lite-modal-surface" role="dialog" aria-modal="true" aria-labelledby="lite-settings-title">
@@ -65,7 +66,7 @@ export function LiteSettingsDialog({ settings, aiOptions, language, saveState, s
             <div className="settings-group-title"><LiteIcon name="lock" /><div><strong>{tr("Protected local data")}</strong><span>{tr("Your history is encrypted on this computer")}</span></div></div>
             <div className="storage-path"><LiteIcon name="folder" /><code>{settings.data_dir || tr("Loading...")}</code></div>
             <div className="settings-actions">
-              <button className="secondary-button wide" onClick={() => api.resyncContexts().then(() => onStatus(tr("Data resynchronized."))).catch((error) => onStatus(String(error)))}><LiteIcon name="refresh" />{tr("Resynchronize data")}</button>
+              <button className="secondary-button wide" onClick={() => api.resyncContexts().then(() => onStatus(tr("Data resynchronized."))).catch((error) => onStatus(formatAppError(error, tr)))}><LiteIcon name="refresh" />{tr("Resynchronize data")}</button>
               <button className="secondary-button wide danger-action" onClick={() => void onDeleteAll()}><LiteIcon name="trash" />{tr("Delete all data")}</button>
             </div>
           </section>

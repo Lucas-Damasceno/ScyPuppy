@@ -31,9 +31,11 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, ShortcutS
 use uuid::Uuid;
 
 mod ai;
+mod app_error;
 mod clipboard_monitor;
 mod crypto;
 use ai::ProviderOption as AiProviderOption;
+use app_error::{command_result, AppError, AppNotice, CommandResult};
 use clipboard_monitor::ClipboardMonitorHandle;
 use crypto::{encrypt_context_file, image_sha256_hex, sha256_hex};
 
@@ -321,7 +323,7 @@ struct MagicSearchDocumentDto {
     provider: String,
     model: String,
     filters: MagicSearchRequest,
-    generation_warning: Option<String>,
+    generation_warning: Option<AppNotice>,
     evidence_count: i64,
     created_at: String,
     evidence: Vec<EvidenceItem>,
@@ -425,7 +427,7 @@ struct CaptureUpdatedEvent {
 
 #[derive(Debug, Serialize, Clone)]
 struct CaptureErrorEvent {
-    message: String,
+    error: AppError,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -457,7 +459,7 @@ struct ContextAnalysisResult {
     contextualized_count: usize,
     suggestions: Vec<ContextSuggestion>,
     unmatched_capture_ids: Vec<String>,
-    ai_message: Option<String>,
+    ai_message: Option<AppNotice>,
 }
 
 #[derive(Debug, Serialize, Clone)]
@@ -516,12 +518,7 @@ impl ClipboardPayload {
     fn content_text(&self) -> String {
         match self {
             ClipboardPayload::Text(text) => text.clone(),
-            ClipboardPayload::Image(image) => {
-                format!(
-                    "[Image copied from clipboard: {}x{}]",
-                    image.width, image.height
-                )
-            }
+            ClipboardPayload::Image(_) => String::new(),
         }
     }
 
@@ -541,36 +538,42 @@ impl ClipboardPayload {
 }
 
 #[tauri::command]
-async fn run_capture(app: AppHandle, state: State<'_, AppState>) -> Result<CaptureDto, String> {
+async fn run_capture(app: AppHandle, state: State<'_, AppState>) -> CommandResult<CaptureDto> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        run_capture_core(&app, state, "capture", INBOX_CONTEXT_ID)
-    })
-    .await
-    .map_err(err)?
-}
-
-#[tauri::command]
-async fn save_reference(app: AppHandle, state: State<'_, AppState>) -> Result<CaptureDto, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        run_capture_core(&app, state, "reference", CONTENT_BASE_CONTEXT_ID)
-    })
-    .await
-    .map_err(err)?
-}
-
-#[tauri::command]
-fn copy_text_to_clipboard(state: State<AppState>, text: String) -> Result<(), String> {
-    write_clipboard_text(state.inner(), &text).map_err(err)
-}
-
-#[tauri::command]
-async fn copy_capture_to_clipboard(state: State<'_, AppState>, id: String) -> Result<(), String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || copy_capture_to_clipboard_core(&state, &id))
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || {
+            run_capture_core(&app, state, "capture", INBOX_CONTEXT_ID)
+        })
         .await
-        .map_err(err)?
+        .map_err(err)?,
+    )
+}
+
+#[tauri::command]
+async fn save_reference(app: AppHandle, state: State<'_, AppState>) -> CommandResult<CaptureDto> {
+    let state = state.inner().clone();
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || {
+            run_capture_core(&app, state, "reference", CONTENT_BASE_CONTEXT_ID)
+        })
+        .await
+        .map_err(err)?,
+    )
+}
+
+#[tauri::command]
+fn copy_text_to_clipboard(state: State<AppState>, text: String) -> CommandResult<()> {
+    command_result(write_clipboard_text(state.inner(), &text).map_err(err))
+}
+
+#[tauri::command]
+async fn copy_capture_to_clipboard(state: State<'_, AppState>, id: String) -> CommandResult<()> {
+    let state = state.inner().clone();
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || copy_capture_to_clipboard_core(&state, &id))
+            .await
+            .map_err(err)?,
+    )
 }
 
 fn default_capture_filter() -> CaptureFilter {
@@ -730,16 +733,19 @@ fn count_captures_from_conn(conn: &Connection, filter: &CaptureFilter) -> Result
 fn list_captures(
     state: State<AppState>,
     filter: Option<CaptureFilter>,
-) -> Result<Vec<CaptureDto>, String> {
+) -> CommandResult<Vec<CaptureDto>> {
     let conn = open_conn(&state)?;
-    list_captures_from_conn(&conn, &filter.unwrap_or_else(default_capture_filter))
+    command_result(list_captures_from_conn(
+        &conn,
+        &filter.unwrap_or_else(default_capture_filter),
+    ))
 }
 
 #[tauri::command]
 fn list_capture_page(
     state: State<AppState>,
     filter: Option<CaptureFilter>,
-) -> Result<CapturePageDto, String> {
+) -> CommandResult<CapturePageDto> {
     let conn = open_conn(&state)?;
     let filter = filter.unwrap_or_else(default_capture_filter);
     let total = count_captures_from_conn(&conn, &filter)?;
@@ -748,7 +754,7 @@ fn list_capture_page(
 }
 
 #[tauri::command]
-fn get_capture(state: State<AppState>, id: String) -> Result<Option<CaptureDto>, String> {
+fn get_capture(state: State<AppState>, id: String) -> CommandResult<Option<CaptureDto>> {
     let conn = open_conn(&state)?;
     let capture = conn
         .query_row(
@@ -772,7 +778,7 @@ fn get_capture(state: State<AppState>, id: String) -> Result<Option<CaptureDto>,
 }
 
 #[tauri::command]
-fn delete_capture(state: State<AppState>, id: String) -> Result<(), String> {
+fn delete_capture(state: State<AppState>, id: String) -> CommandResult<()> {
     let mut conn = open_conn(&state)?;
     let assets = assets_for_capture(&conn, &id)?;
     let context_ids = context_ids_for_capture(&conn, &id)?;
@@ -791,7 +797,7 @@ fn delete_capture(state: State<AppState>, id: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn list_contexts(state: State<AppState>) -> Result<Vec<ContextDto>, String> {
+fn list_contexts(state: State<AppState>) -> CommandResult<Vec<ContextDto>> {
     let conn = open_conn(&state)?;
     let mut stmt = conn
         .prepare(
@@ -824,9 +830,9 @@ fn list_contexts(state: State<AppState>) -> Result<Vec<ContextDto>, String> {
 }
 
 #[tauri::command]
-fn get_library_counts(state: State<AppState>) -> Result<LibraryCounts, String> {
+fn get_library_counts(state: State<AppState>) -> CommandResult<LibraryCounts> {
     let conn = open_conn(&state)?;
-    conn.query_row(
+    command_result(conn.query_row(
         "SELECT COUNT(*),
                 SUM(CASE WHEN capture_kind <> 'reference' AND NOT EXISTS
                     (SELECT 1 FROM capture_contexts cc WHERE cc.capture_id = captures.id) THEN 1 ELSE 0 END),
@@ -838,11 +844,11 @@ fn get_library_counts(state: State<AppState>) -> Result<LibraryCounts, String> {
             inbox: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
             content_base: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
         }),
-    ).map_err(err)
+    ).map_err(err))
 }
 
 #[tauri::command]
-fn list_categories(state: State<AppState>) -> Result<Vec<CategoryDto>, String> {
+fn list_categories(state: State<AppState>) -> CommandResult<Vec<CategoryDto>> {
     let conn = open_conn(&state)?;
     let mut stmt = conn
         .prepare(
@@ -868,7 +874,7 @@ fn list_categories(state: State<AppState>) -> Result<Vec<CategoryDto>, String> {
 }
 
 #[tauri::command]
-fn delete_all_data(app: AppHandle, state: State<AppState>) -> Result<(), String> {
+fn delete_all_data(app: AppHandle, state: State<AppState>) -> CommandResult<()> {
     delete_all_data_from_state(&state)?;
     let _ = app.emit("data-reset", Value::Null);
     Ok(())
@@ -878,18 +884,20 @@ fn delete_all_data(app: AppHandle, state: State<AppState>) -> Result<(), String>
 async fn analyze_contexts(
     state: State<'_, AppState>,
     request: CategorizeRequest,
-) -> Result<ContextAnalysisResult, String> {
+) -> CommandResult<ContextAnalysisResult> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_conn(&state)?;
-        analyze_context_suggestions(&conn, &state, request)
-    })
-    .await
-    .map_err(err)?
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = open_conn(&state)?;
+            analyze_context_suggestions(&conn, &state, request)
+        })
+        .await
+        .map_err(err)?,
+    )
 }
 
 #[tauri::command]
-fn create_context(state: State<AppState>, name: String) -> Result<ContextDto, String> {
+fn create_context(state: State<AppState>, name: String) -> CommandResult<ContextDto> {
     let name = normalized_context_name(&name)?;
     let normalized_name = normalize_text(&name);
     let mut conn = open_conn(&state)?;
@@ -925,9 +933,9 @@ fn create_context(state: State<AppState>, name: String) -> Result<ContextDto, St
 }
 
 #[tauri::command]
-fn rename_context(state: State<AppState>, id: String, name: String) -> Result<ContextDto, String> {
+fn rename_context(state: State<AppState>, id: String, name: String) -> CommandResult<ContextDto> {
     if id == INBOX_CONTEXT_ID || id == CONTENT_BASE_CONTEXT_ID {
-        return Err("O contexto Inbox nao pode ser renomeado.".into());
+        return Err(AppError::new("context.protected_rename"));
     }
 
     let name = normalized_context_name(&name)?;
@@ -955,13 +963,13 @@ fn rename_context(state: State<AppState>, id: String, name: String) -> Result<Co
     list_contexts(state)?
         .into_iter()
         .find(|context| context.id == id)
-        .ok_or_else(|| "Contexto nao encontrado.".to_string())
+        .ok_or_else(|| AppError::new("context.not_found"))
 }
 
 #[tauri::command]
-fn delete_context(state: State<AppState>, id: String) -> Result<(), String> {
+fn delete_context(state: State<AppState>, id: String) -> CommandResult<()> {
     if id == INBOX_CONTEXT_ID || id == CONTENT_BASE_CONTEXT_ID {
-        return Err("O contexto Inbox nao pode ser excluido.".into());
+        return Err(AppError::new("context.protected_delete"));
     }
 
     let mut conn = open_conn(&state)?;
@@ -985,7 +993,7 @@ fn add_capture_contexts(
     state: State<AppState>,
     capture_id: String,
     context_ids: Vec<String>,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let mut conn = open_conn(&state)?;
     let transaction = conn.transaction().map_err(err)?;
     validate_capture_exists(&transaction, &capture_id)?;
@@ -1013,7 +1021,7 @@ fn add_captures_to_context(
     state: State<AppState>,
     capture_ids: Vec<String>,
     context_id: String,
-) -> Result<usize, String> {
+) -> CommandResult<usize> {
     if capture_ids.is_empty() {
         return Ok(0);
     }
@@ -1049,7 +1057,7 @@ fn remove_capture_context(
     state: State<AppState>,
     capture_id: String,
     context_id: String,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let conn = open_conn(&state)?;
     validate_capture_exists(&conn, &capture_id)?;
     conn.execute(
@@ -1063,19 +1071,19 @@ fn remove_capture_context(
     Ok(())
 }
 
-fn validate_capture_exists(conn: &Connection, capture_id: &str) -> Result<(), String> {
+fn validate_capture_exists(conn: &Connection, capture_id: &str) -> CommandResult<()> {
     let exists = conn
         .query_row("SELECT 1 FROM captures WHERE id = ?", [capture_id], |_| {
             Ok(())
         })
         .optional()
         .map_err(err)?;
-    exists.ok_or_else(|| "Capture not found.".to_string())
+    exists.ok_or_else(|| AppError::new("capture.not_found"))
 }
 
-fn validate_user_context_exists(conn: &Connection, context_id: &str) -> Result<(), String> {
+fn validate_user_context_exists(conn: &Connection, context_id: &str) -> CommandResult<()> {
     if context_id == INBOX_CONTEXT_ID || context_id == CONTENT_BASE_CONTEXT_ID {
-        return Err("Reserved collections cannot be assigned as contexts.".into());
+        return Err(AppError::new("context.reserved_collection"));
     }
     let exists = conn
         .query_row("SELECT 1 FROM contexts WHERE id = ?", [context_id], |_| {
@@ -1083,11 +1091,11 @@ fn validate_user_context_exists(conn: &Connection, context_id: &str) -> Result<(
         })
         .optional()
         .map_err(err)?;
-    exists.ok_or_else(|| "Context not found.".to_string())
+    exists.ok_or_else(|| AppError::new("context.not_found"))
 }
 
 #[tauri::command]
-fn list_recent_contexts(state: State<AppState>) -> Result<Vec<ContextDto>, String> {
+fn list_recent_contexts(state: State<AppState>) -> CommandResult<Vec<ContextDto>> {
     let conn = open_conn(&state)?;
     let mut stmt = conn
         .prepare(
@@ -1122,7 +1130,7 @@ fn list_recent_contexts(state: State<AppState>) -> Result<Vec<ContextDto>, Strin
 }
 
 #[tauri::command]
-fn get_settings(app: AppHandle, state: State<AppState>) -> Result<SettingsDto, String> {
+fn get_settings(app: AppHandle, state: State<AppState>) -> CommandResult<SettingsDto> {
     let conn = open_conn(&state)?;
     let mut settings = settings_from_conn(&conn, &state)?;
     #[cfg(target_os = "windows")]
@@ -1141,7 +1149,7 @@ fn update_settings(
     app: AppHandle,
     state: State<AppState>,
     settings: SettingsDto,
-) -> Result<SettingsDto, String> {
+) -> CommandResult<SettingsDto> {
     #[cfg(target_os = "windows")]
     {
         if let Some(autolaunch) = app.try_state::<tauri_plugin_autostart::AutoLaunchManager>() {
@@ -1251,7 +1259,7 @@ fn update_settings(
     }
     conn.execute("DELETE FROM settings WHERE key = 'ai_api_key'", [])
         .map_err(err)?;
-    settings_from_conn(&conn, &state)
+    command_result(settings_from_conn(&conn, &state))
 }
 
 fn persist_clipboard_monitor_settings(
@@ -1278,10 +1286,10 @@ fn persist_clipboard_monitor_settings(
 }
 
 #[tauri::command]
-fn clear_ai_api_key(state: State<AppState>) -> Result<SettingsDto, String> {
+fn clear_ai_api_key(state: State<AppState>) -> CommandResult<SettingsDto> {
     delete_credential(AI_KEY_CREDENTIAL)?;
     let conn = open_conn(&state)?;
-    settings_from_conn(&conn, &state)
+    command_result(settings_from_conn(&conn, &state))
 }
 
 #[tauri::command]
@@ -1290,67 +1298,76 @@ fn get_ai_provider_options() -> Vec<AiProviderOption> {
 }
 
 #[tauri::command]
-async fn ask_chat(state: State<'_, AppState>, request: ChatRequest) -> Result<ChatAnswer, String> {
+async fn ask_chat(state: State<'_, AppState>, request: ChatRequest) -> CommandResult<ChatAnswer> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_conn(&state)?;
-        answer_chat_locally(&conn, &state, request)
-    })
-    .await
-    .map_err(err)?
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = open_conn(&state)?;
+            answer_chat_locally(&conn, &state, request)
+        })
+        .await
+        .map_err(err)?,
+    )
 }
 
 #[tauri::command]
-fn get_tag_document(state: State<AppState>, tag: String) -> Result<TagDocumentDto, String> {
+fn get_tag_document(state: State<AppState>, tag: String) -> CommandResult<TagDocumentDto> {
     let conn = open_conn(&state)?;
     build_tag_document(&conn, &tag)
 }
 
 #[tauri::command]
-fn export_tag_document(state: State<AppState>, tag: String) -> Result<String, String> {
+fn export_tag_document(state: State<AppState>, tag: String) -> CommandResult<String> {
     let conn = open_conn(&state)?;
     let document = build_tag_document(&conn, &tag)?;
-    export_markdown(&state, "tags", &document.tag, &document.markdown)
+    command_result(export_markdown(
+        &state,
+        "tags",
+        &document.tag,
+        &document.markdown,
+    ))
 }
 
 #[tauri::command]
 async fn generate_magic_search(
     state: State<'_, AppState>,
     request: MagicSearchRequest,
-) -> Result<MagicSearchDocumentDto, String> {
+) -> CommandResult<MagicSearchDocumentDto> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut conn = open_conn(&state)?;
         generate_magic_search_document(&mut conn, &state, request)
     })
     .await
-    .map_err(err)?
+    .map_err(|error| AppError::from(err(error)))?
 }
 
 #[tauri::command]
 async fn preview_magic_search(
     state: State<'_, AppState>,
     request: MagicSearchRequest,
-) -> Result<MagicSearchPreviewDto, String> {
+) -> CommandResult<MagicSearchPreviewDto> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = open_conn(&state)?;
-        preview_magic_search_document(&conn, request)
-    })
-    .await
-    .map_err(err)?
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = open_conn(&state)?;
+            preview_magic_search_document(&conn, request)
+        })
+        .await
+        .map_err(err)?,
+    )
 }
 
 #[tauri::command]
-fn list_magic_searches(state: State<AppState>) -> Result<Vec<MagicSearchListItemDto>, String> {
+fn list_magic_searches(state: State<AppState>) -> CommandResult<Vec<MagicSearchListItemDto>> {
     let conn = open_conn(&state)?;
-    list_magic_search_documents(&conn)
+    command_result(list_magic_search_documents(&conn))
 }
 
 #[tauri::command]
-fn get_magic_search(state: State<AppState>, id: String) -> Result<MagicSearchDocumentDto, String> {
+fn get_magic_search(state: State<AppState>, id: String) -> CommandResult<MagicSearchDocumentDto> {
     let conn = open_conn(&state)?;
-    get_magic_search_document(&conn, &id)
+    command_result(get_magic_search_document(&conn, &id))
 }
 
 #[tauri::command]
@@ -1358,13 +1375,18 @@ fn export_magic_search(
     state: State<AppState>,
     id: String,
     path: Option<String>,
-) -> Result<String, String> {
+) -> CommandResult<String> {
     let conn = open_conn(&state)?;
     let document = get_magic_search_document(&conn, &id)?;
     if let Some(path) = path {
         export_markdown_to_path(&path, &document.markdown)
     } else {
-        export_markdown(&state, "magic-search", &document.title, &document.markdown)
+        command_result(export_markdown(
+            &state,
+            "magic-search",
+            &document.title,
+            &document.markdown,
+        ))
     }
 }
 
@@ -1373,9 +1395,9 @@ fn update_magic_search_markdown(
     state: State<AppState>,
     id: String,
     markdown: String,
-) -> Result<MagicSearchDocumentDto, String> {
+) -> CommandResult<MagicSearchDocumentDto> {
     if markdown.trim().is_empty() {
-        return Err("O documento não pode ficar vazio.".to_string());
+        return Err(AppError::new("document.content_required"));
     }
     let conn = open_conn(&state)?;
     let changed = conn
@@ -1385,9 +1407,9 @@ fn update_magic_search_markdown(
         )
         .map_err(err)?;
     if changed == 0 {
-        return Err("Documento não encontrado.".to_string());
+        return Err(AppError::new("document.not_found"));
     }
-    get_magic_search_document(&conn, &id)
+    command_result(get_magic_search_document(&conn, &id))
 }
 
 #[tauri::command]
@@ -1395,10 +1417,10 @@ fn rename_magic_search(
     state: State<AppState>,
     id: String,
     title: String,
-) -> Result<MagicSearchDocumentDto, String> {
+) -> CommandResult<MagicSearchDocumentDto> {
     let title = title.split_whitespace().collect::<Vec<_>>().join(" ");
     if title.is_empty() {
-        return Err("O título do documento não pode ficar vazio.".to_string());
+        return Err(AppError::new("document.title_required"));
     }
     let conn = open_conn(&state)?;
     let root_id = conn
@@ -1413,11 +1435,11 @@ fn rename_magic_search(
         params![shorten(&title, 120), root_id],
     )
     .map_err(err)?;
-    get_magic_search_document(&conn, &id)
+    command_result(get_magic_search_document(&conn, &id))
 }
 
 #[tauri::command]
-fn delete_magic_search(state: State<AppState>, root_id: String) -> Result<(), String> {
+fn delete_magic_search(state: State<AppState>, root_id: String) -> CommandResult<()> {
     let conn = open_conn(&state)?;
     conn.execute(
         "DELETE FROM magic_search_documents WHERE root_id = ?",
@@ -1431,7 +1453,7 @@ fn delete_magic_search(state: State<AppState>, root_id: String) -> Result<(), St
 fn delete_old_magic_search_versions(
     state: State<AppState>,
     keep_id: String,
-) -> Result<MagicSearchDocumentDto, String> {
+) -> CommandResult<MagicSearchDocumentDto> {
     let conn = open_conn(&state)?;
     let root_id = conn
         .query_row(
@@ -1450,7 +1472,7 @@ fn delete_old_magic_search_versions(
         [&keep_id],
     )
     .map_err(err)?;
-    get_magic_search_document(&conn, &keep_id)
+    command_result(get_magic_search_document(&conn, &keep_id))
 }
 
 #[tauri::command]
@@ -1458,10 +1480,10 @@ fn add_magic_search_evidence(
     state: State<AppState>,
     id: String,
     capture_id: String,
-) -> Result<MagicSearchDocumentDto, String> {
+) -> CommandResult<MagicSearchDocumentDto> {
     let conn = open_conn(&state)?;
     add_magic_search_evidence_to_document(&conn, &id, &capture_id)?;
-    get_magic_search_document(&conn, &id)
+    command_result(get_magic_search_document(&conn, &id))
 }
 
 #[tauri::command]
@@ -1469,15 +1491,15 @@ fn remove_magic_search_evidence(
     state: State<AppState>,
     id: String,
     capture_id: String,
-) -> Result<MagicSearchDocumentDto, String> {
+) -> CommandResult<MagicSearchDocumentDto> {
     let conn = open_conn(&state)?;
     remove_magic_search_evidence_from_document(&conn, &id, &capture_id)?;
-    get_magic_search_document(&conn, &id)
+    command_result(get_magic_search_document(&conn, &id))
 }
 
 #[tauri::command]
-fn resync_markdown(state: State<AppState>) -> Result<(), String> {
-    sync_markdown(&state).map_err(err)
+fn resync_markdown(state: State<AppState>) -> CommandResult<()> {
+    command_result(sync_markdown(&state).map_err(err))
 }
 
 #[tauri::command]
@@ -1485,15 +1507,17 @@ async fn paste_capture(
     app: AppHandle,
     state: State<'_, AppState>,
     id: String,
-) -> Result<(), String> {
+) -> CommandResult<()> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || paste_capture_core(&app, &state, &id))
-        .await
-        .map_err(err)?
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || paste_capture_core(&app, &state, &id))
+            .await
+            .map_err(err)?,
+    )
 }
 
 #[tauri::command]
-fn close_paste_palette(app: AppHandle) -> Result<(), String> {
+fn close_paste_palette(app: AppHandle) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("paste") {
         window.hide().map_err(err)?;
     }
@@ -1501,7 +1525,7 @@ fn close_paste_palette(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn close_quick_context(app: AppHandle) -> Result<(), String> {
+fn close_quick_context(app: AppHandle) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("quick-context") {
         window.hide().map_err(err)?;
     }
@@ -1513,12 +1537,16 @@ fn open_magic_search(
     app: AppHandle,
     query: Option<String>,
     response_mode: Option<String>,
-) -> Result<(), String> {
-    show_magic_search(&app, query.as_deref(), response_mode.as_deref())
+) -> CommandResult<()> {
+    command_result(show_magic_search(
+        &app,
+        query.as_deref(),
+        response_mode.as_deref(),
+    ))
 }
 
 #[tauri::command]
-fn close_magic_search(app: AppHandle) -> Result<(), String> {
+fn close_magic_search(app: AppHandle) -> CommandResult<()> {
     if let Some(window) = app.get_webview_window("magic-search") {
         window.hide().map_err(err)?;
     }
@@ -1526,10 +1554,10 @@ fn close_magic_search(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_magic_document(app: AppHandle, id: String) -> Result<(), String> {
+fn open_magic_document(app: AppHandle, id: String) -> CommandResult<()> {
     let window = app
         .get_webview_window("main")
-        .ok_or_else(|| "A janela principal do ScryPuppy não está disponível.".to_string())?;
+        .ok_or_else(|| AppError::new("window.main_unavailable"))?;
     window.show().map_err(err)?;
     window.set_focus().map_err(err)?;
     window.emit("magic-document-opened", id).map_err(err)?;
@@ -1913,7 +1941,7 @@ fn persist_clipboard_payload(
 ) -> Result<CaptureDto, String> {
     let _session = begin_capture(&state)?;
     let content_text = payload.content_text();
-    if content_text.trim().is_empty() {
+    if matches!(&payload, ClipboardPayload::Text(text) if text.trim().is_empty()) {
         return Err("O clipboard nao retornou conteudo para salvar.".into());
     }
 
@@ -3159,16 +3187,11 @@ fn captures_for_tag(conn: &Connection, tag: &str) -> Result<Vec<CaptureDto>, Str
     Ok(captures)
 }
 
-fn build_tag_document(conn: &Connection, tag: &str) -> Result<TagDocumentDto, String> {
+fn build_tag_document(conn: &Connection, tag: &str) -> CommandResult<TagDocumentDto> {
     let portuguese = get_setting(conn, "language")?.as_deref() == Some("pt-BR");
     let tag = tag.trim();
     if tag.is_empty() {
-        return Err(if portuguese {
-            "A Tag não pode ser vazia."
-        } else {
-            "The tag cannot be empty."
-        }
-        .into());
+        return Err(AppError::new("tag.name_required"));
     }
     let captures = captures_for_tag(conn, tag)?;
     let apps = captures
@@ -3628,17 +3651,12 @@ fn generate_magic_search_document(
     conn: &mut Connection,
     state: &AppState,
     mut request: MagicSearchRequest,
-) -> Result<MagicSearchDocumentDto, String> {
+) -> CommandResult<MagicSearchDocumentDto> {
     let settings = settings_with_ai_secret(conn, state)?;
     let portuguese = settings.language == "pt-BR";
     let query = request.query.trim().to_string();
     if query.is_empty() {
-        return Err(if portuguese {
-            "Descreva o que o Magic Search deve consolidar."
-        } else {
-            "Describe what Magic Search should consolidate."
-        }
-        .into());
+        return Err(AppError::new("search.query_required"));
     }
     let mode = classify_magic_response(&query, request.response_mode.as_deref());
     request.response_mode = Some(mode.as_str().to_string());
@@ -3673,12 +3691,7 @@ fn generate_magic_search_document(
         .take(limit)
         .collect::<Vec<_>>();
     if relevant.is_empty() {
-        return Err(if portuguese {
-            "O Magic Search não encontrou evidências suficientes para responder a esta solicitação."
-        } else {
-            "Magic Search did not find enough evidence to answer this request."
-        }
-        .into());
+        return Err(AppError::new("search.no_evidence"));
     }
 
     let title = match mode {
@@ -3754,16 +3767,15 @@ fn generate_magic_search_document(
                 markdown = constrain_magic_response(&markdown, mode);
                 (markdown, settings.ai_provider, settings.ai_model, None)
             }
-            Err(error) => (
-                deterministic,
-                "local".to_string(),
-                "deterministic".to_string(),
-                Some(if portuguese {
-                    format!("O provedor de IA falhou; foi usada a síntese local: {error}")
-                } else {
-                    format!("The AI provider failed; local synthesis was used: {error}")
-                }),
-            ),
+            Err(error) => {
+                eprintln!("AI provider failed; local synthesis was used: {error}");
+                (
+                    deterministic,
+                    "local".to_string(),
+                    "deterministic".to_string(),
+                    Some(AppNotice::new("ai.provider_failed_local_fallback")),
+                )
+            }
         }
     };
     let markdown = if mode == MagicResponseMode::Document {
@@ -3795,11 +3807,16 @@ fn generate_magic_search_document(
             |row| row.get::<_, i64>(0),
         )
         .map_err(err)?;
+    let generation_warning_json = generation_warning
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(err)?;
     transaction.execute(
         "INSERT INTO magic_search_documents
          (id, root_id, previous_document_id, version, title, query, markdown, provider, model, filters_json, generation_warning, evidence_count, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        params![id, root_id, request.previous_document_id, version, title, query, markdown, provider, model, filters_json, generation_warning, relevant.len() as i64, created_at],
+        params![id, root_id, request.previous_document_id, version, title, query, markdown, provider, model, filters_json, generation_warning_json, relevant.len() as i64, created_at],
     ).map_err(err)?;
     for (rank, item) in relevant.iter().enumerate() {
         let capture = &item.capture;
@@ -4385,7 +4402,7 @@ fn get_magic_search_document(
         provider: row.7,
         model: row.8,
         filters,
-        generation_warning: row.10,
+        generation_warning: row.10.as_deref().and_then(AppNotice::from_stored),
         evidence_count: row.11,
         created_at: row.12,
         evidence: Vec::new(),
@@ -4456,15 +4473,15 @@ fn export_markdown(
     Ok(path.display().to_string())
 }
 
-fn export_markdown_to_path(requested_path: &str, markdown: &str) -> Result<String, String> {
+fn export_markdown_to_path(requested_path: &str, markdown: &str) -> CommandResult<String> {
     let requested_path = requested_path.trim();
     if requested_path.is_empty() {
-        return Err("Choose where the Markdown document should be saved.".to_string());
+        return Err(AppError::new("export.path_required"));
     }
 
     let mut path = PathBuf::from(requested_path);
     if !path.is_absolute() {
-        return Err("The export destination must be an absolute path.".to_string());
+        return Err(AppError::new("export.absolute_path_required"));
     }
     if path
         .extension()
@@ -4475,14 +4492,14 @@ fn export_markdown_to_path(requested_path: &str, markdown: &str) -> Result<Strin
         path.set_extension("md");
     }
     if path.is_dir() {
-        return Err("Choose a Markdown file, not a directory.".to_string());
+        return Err(AppError::new("export.file_required"));
     }
     let parent = path
         .parent()
         .filter(|parent| parent.is_dir())
-        .ok_or_else(|| "The selected export folder does not exist.".to_string())?;
+        .ok_or_else(|| AppError::new("export.folder_not_found"))?;
     if !parent.is_absolute() {
-        return Err("The export destination must be an absolute path.".to_string());
+        return Err(AppError::new("export.absolute_path_required"));
     }
 
     fs::write(&path, markdown).map_err(err)?;
@@ -4599,7 +4616,7 @@ fn import_file_capture(
         .and_then(|value| value.to_str())
         .unwrap_or("arquivo");
     let content_text = if is_image {
-        format!("Image saved from Explorer: {file_name}")
+        String::new()
     } else {
         String::from_utf8(bytes.clone())
             .map_err(|_| "O arquivo de texto precisa estar codificado em UTF-8.".to_string())?
@@ -4694,7 +4711,12 @@ fn process_import_args(app: AppHandle, args: Vec<String>) {
     thread::spawn(move || {
         let state = app.state::<AppState>().inner().clone();
         if let Err(message) = import_file_capture(&app, state, &path) {
-            let _ = app.emit("capture-error", CaptureErrorEvent { message });
+            let _ = app.emit(
+                "capture-error",
+                CaptureErrorEvent {
+                    error: AppError::from(message),
+                },
+            );
         }
     });
 }
@@ -5676,11 +5698,7 @@ fn analyze_context_suggestions(
     if request.include_ai.unwrap_or(false) {
         let settings = settings_with_ai_secret(conn, state)?;
         if settings.ai_api_key.trim().is_empty() {
-            ai_message = Some(if settings.language == "pt-BR" {
-                "A IA não foi usada porque nenhuma chave está configurada; as sugestões locais continuam disponíveis."
-            } else {
-                "AI was not used because no key is configured; local suggestions remain available."
-            }.into());
+            ai_message = Some(AppNotice::new("ai.key_missing_local_only"));
         } else {
             match call_ai_for_context_suggestions(&settings, &captures) {
                 Ok(response) => {
@@ -5708,11 +5726,10 @@ fn analyze_context_suggestions(
                     }
                 }
                 Err(error) => {
-                    ai_message = Some(if settings.language == "pt-BR" {
-                        format!("A análise de IA falhou; as sugestões locais continuam disponíveis: {error}")
-                    } else {
-                        format!("AI analysis failed; local suggestions remain available: {error}")
-                    });
+                    eprintln!(
+                        "AI context analysis failed; local suggestions remain available: {error}"
+                    );
+                    ai_message = Some(AppNotice::new("ai.analysis_failed_local_fallback"));
                 }
             }
         }
@@ -5747,7 +5764,7 @@ fn analyze_context_suggestions(
 fn apply_context_suggestions(
     state: State<AppState>,
     suggestions: Vec<ApplyContextSuggestion>,
-) -> Result<ApplyContextSuggestionsResult, String> {
+) -> CommandResult<ApplyContextSuggestionsResult> {
     let mut conn = open_conn(&state)?;
     let transaction = conn.transaction().map_err(err)?;
     let mut contexts_created = 0;
@@ -6935,8 +6952,12 @@ pub fn run() {
                                     .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyF);
                                 if is_magic {
                                     if let Err(message) = show_magic_search(app, None, None) {
-                                        let _ = app
-                                            .emit("capture-error", CaptureErrorEvent { message });
+                                        let _ = app.emit(
+                                            "capture-error",
+                                            CaptureErrorEvent {
+                                                error: AppError::from(message),
+                                            },
+                                        );
                                     }
                                     return;
                                 }
@@ -6945,8 +6966,12 @@ pub fn run() {
                                 if is_paste {
                                     let state = app.state::<AppState>();
                                     if let Err(message) = show_paste_palette(app, &state) {
-                                        let _ = app
-                                            .emit("capture-error", CaptureErrorEvent { message });
+                                        let _ = app.emit(
+                                            "capture-error",
+                                            CaptureErrorEvent {
+                                                error: AppError::from(message),
+                                            },
+                                        );
                                     }
                                     return;
                                 }
@@ -6966,8 +6991,12 @@ pub fn run() {
                                         if message == DUPLICATE_CAPTURE_IGNORED {
                                             return;
                                         }
-                                        let _ = app_handle
-                                            .emit("capture-error", CaptureErrorEvent { message });
+                                        let _ = app_handle.emit(
+                                            "capture-error",
+                                            CaptureErrorEvent {
+                                                error: AppError::from(message),
+                                            },
+                                        );
                                     }
                                 });
                             }

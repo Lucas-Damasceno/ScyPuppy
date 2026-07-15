@@ -500,6 +500,60 @@ const portuguese: Record<string, string> = {
   "[Image copied from clipboard: {width}x{height}]": "[Imagem copiada do clipboard: {width}x{height}]",
   "Image saved from Explorer: {name}": "Imagem salva pelo Explorer: {name}",
   "The focused app did not update the clipboard after the shortcut. Release the keys and try capturing again.": "O app focado não atualizou o clipboard depois do atalho. Tente soltar as teclas e repetir a captura.",
+  "Something went wrong. Please try again.": "Algo deu errado. Tente novamente.",
+  "ScryPuppy could not prepare the clipboard. Please try again.": "O ScryPuppy não conseguiu preparar o clipboard. Tente novamente.",
+  "ScryPuppy could not trigger the copy action. Please try again.": "O ScryPuppy não conseguiu acionar a cópia. Tente novamente.",
+  "The clipboard did not return any content to save.": "O clipboard não retornou conteúdo para salvar.",
+  "The clipboard returned invalid image data.": "O clipboard retornou dados de imagem inválidos.",
+  "This capture is already saved.": "Esta captura já está salva.",
+  "ScryPuppy could not start a new capture. Please try again.": "O ScryPuppy não conseguiu iniciar uma nova captura. Tente novamente.",
+  "Capture not found.": "Captura não encontrada.",
+  "The Content Base accepts selected text. Select text before using the shortcut.": "A Base de conteúdo aceita texto selecionado. Selecione um texto antes de usar o atalho.",
+  "Enter a context name.": "Digite um nome para o contexto.",
+  "Context not found.": "Contexto não encontrado.",
+  "This built-in collection cannot be renamed.": "Esta coleção interna não pode ser renomeada.",
+  "This built-in collection cannot be deleted.": "Esta coleção interna não pode ser excluída.",
+  "Built-in collections cannot be assigned as contexts.": "Coleções internas não podem ser atribuídas como contextos.",
+  "The context encryption key is invalid.": "A chave de criptografia do contexto é inválida.",
+  "The document cannot be empty.": "O documento não pode ficar vazio.",
+  "Document not found.": "Documento não encontrado.",
+  "Enter a document title.": "Digite um título para o documento.",
+  "This capture is already a document source.": "Esta captura já é uma fonte do documento.",
+  "Document source not found.": "Fonte do documento não encontrada.",
+  "The main ScryPuppy window is unavailable.": "A janela principal do ScryPuppy não está disponível.",
+  "Quick Paste is unavailable.": "A Colagem Rápida não está disponível.",
+  "Ask ScryPuppy is unavailable.": "O Ask ScryPuppy não está disponível.",
+  "ScryPuppy could not identify the active window.": "O ScryPuppy não conseguiu identificar a janela ativa.",
+  "The active window could not be found for the screenshot.": "A janela ativa não foi encontrada para a captura de tela.",
+  "Restore the active window before capturing a screenshot.": "Restaure a janela ativa antes de capturar uma imagem.",
+  "The selected file does not exist: {path}": "O arquivo selecionado não existe: {path}",
+  "Choose an image or text file supported by ScryPuppy.": "Escolha uma imagem ou arquivo de texto compatível com o ScryPuppy.",
+  "The selected file exceeds the 20 MB limit.": "O arquivo selecionado excede o limite de 20 MB.",
+  "The text file must use UTF-8 encoding.": "O arquivo de texto deve usar codificação UTF-8.",
+  "The selected file is empty.": "O arquivo selecionado está vazio.",
+  "The local database key is invalid.": "A chave local do banco de dados é inválida.",
+  "ScryPuppy could not open the encrypted database.": "O ScryPuppy não conseguiu abrir o banco de dados criptografado.",
+  "ScryPuppy could not encrypt the existing database.": "O ScryPuppy não conseguiu criptografar o banco de dados existente.",
+  "ScryPuppy could not validate the encrypted database.": "O ScryPuppy não conseguiu validar o banco de dados criptografado.",
+  "Windows Credential Manager is unavailable.": "O Gerenciador de Credenciais do Windows não está disponível.",
+  "ScryPuppy could not save the credential in Windows Credential Manager.": "O ScryPuppy não conseguiu salvar a credencial no Gerenciador de Credenciais do Windows.",
+  "ScryPuppy could not read Windows Credential Manager.": "O ScryPuppy não conseguiu ler o Gerenciador de Credenciais do Windows.",
+  "ScryPuppy could not remove the credential from Windows Credential Manager.": "O ScryPuppy não conseguiu remover a credencial do Gerenciador de Credenciais do Windows.",
+  "The local security credential is empty.": "A credencial de segurança local está vazia.",
+  "The local database key was not found in Windows Credential Manager.": "A chave local do banco de dados não foi encontrada no Gerenciador de Credenciais do Windows.",
+  "Local OCR is available in the Windows version.": "O OCR local está disponível na versão para Windows.",
+  "The image exceeds the local OCR limit ({maxDimension}px).": "A imagem excede o limite do OCR local ({maxDimension}px).",
+  "Enter a tag name.": "Digite um nome para a tag.",
+  "The AI provider is not supported: {provider}": "O provedor de IA não é compatível: {provider}",
+  "The AI provider was unavailable, so ScryPuppy used local synthesis.": "O provedor de IA não estava disponível, então o ScryPuppy usou a síntese local.",
+  "AI analysis was unavailable; local suggestions remain available.": "A análise por IA não estava disponível; as sugestões locais continuam disponíveis.",
+  "No AI key is configured; local suggestions remain available.": "Nenhuma chave de IA está configurada; as sugestões locais continuam disponíveis.",
+  "Describe what Ask ScryPuppy should consolidate.": "Descreva o que o Ask ScryPuppy deve consolidar.",
+  "Ask ScryPuppy did not find enough evidence for this request.": "O Ask ScryPuppy não encontrou evidências suficientes para esta solicitação.",
+  "Choose where the Markdown document should be saved.": "Escolha onde o documento Markdown deve ser salvo.",
+  "Choose an absolute path for the exported document.": "Escolha um caminho absoluto para o documento exportado.",
+  "Choose a Markdown file, not a directory.": "Escolha um arquivo Markdown, não uma pasta.",
+  "The selected export folder does not exist.": "A pasta selecionada para exportação não existe.",
   "capture": "captura",
   "referencia": "referência",
   "imagem": "imagem",
@@ -512,40 +566,8 @@ const portuguese: Record<string, string> = {
   "desconhecido": "desconhecido",
 };
 
-const englishOverrides: Record<string, string> = {
+const legacySystemLabels: Record<string, string> = {
   "Base de conteúdo": "Content Base",
-  "O contexto Inbox nao pode ser renomeado.": "The Inbox context cannot be renamed.",
-  "Contexto nao encontrado.": "Context not found.",
-  "O contexto Inbox nao pode ser excluido.": "The Inbox context cannot be deleted.",
-  "O documento não pode ficar vazio.": "The document cannot be empty.",
-  "Documento não encontrado.": "Document not found.",
-  "O título do documento não pode ficar vazio.": "The document title cannot be empty.",
-  "A janela principal do ScryPuppy não está disponível.": "The main ScryPuppy window is unavailable.",
-  "Janela de colagem indisponivel.": "The quick paste window is unavailable.",
-  "A janela de busca do ScryPuppy não está disponível.": "The ScryPuppy search window is unavailable.",
-  "A Base de conteúdo aceita texto selecionado. Selecione texto antes de usar o atalho.": "The Content Base accepts selected text. Select text before using the shortcut.",
-  "O clipboard nao retornou conteudo para salvar.": "The clipboard did not return any content to save.",
-  "Nao foi possivel controlar o estado da captura.": "The capture state could not be updated.",
-  "Esta captura já é uma fonte do documento.": "This capture is already a document source.",
-  "Fonte não encontrada no documento.": "Source not found in the document.",
-  "O ScryPuppy aceita imagens e arquivos de texto neste menu.": "ScryPuppy accepts images and text files from this menu.",
-  "O arquivo selecionado excede o limite de 20 MB.": "The selected file exceeds the 20 MB limit.",
-  "O arquivo de texto precisa estar codificado em UTF-8.": "The text file must use UTF-8 encoding.",
-  "O arquivo selecionado esta vazio.": "The selected file is empty.",
-  "Chave local do banco inválida.": "The local database key is invalid.",
-  "A credencial de segurança local está vazia.": "The local security credential is empty.",
-  "A chave de segurança local não foi encontrada no Windows Credential Manager. A base existente não será aberta sem ela.": "The local security key was not found in Windows Credential Manager. The existing database cannot be opened without it.",
-  "Nao foi possivel identificar a janela ativa.": "The active window could not be identified.",
-  "O app focado nao atualizou o clipboard depois do atalho. Tente soltar as teclas e repetir a captura.": "The focused app did not update the clipboard after the shortcut. Release the keys and try capturing again.",
-  "Dados de imagem do clipboard invalidos.": "The clipboard image data is invalid.",
-  "Janela ativa nao encontrada para screenshot.": "The active window could not be found for the screenshot.",
-  "Janela ativa minimizada; screenshot nao capturado.": "The active window is minimized, so the screenshot was not captured.",
-  "Captura nao encontrada.": "Capture not found.",
-  "Nome do contexto nao pode ser vazio.": "The context name cannot be empty.",
-  "OCR local está disponível nesta versão para Windows.": "Local OCR is available in this version on Windows.",
-  "Chave de contexto inválida.": "The context key is invalid.",
-  "A Tag não pode ser vazia.": "The tag cannot be empty.",
-  "A IA não foi usada porque nenhuma chave está configurada; as sugestões locais continuam disponíveis.": "AI was not used because no key is configured; local suggestions remain available.",
   referencia: "reference",
   captura: "capture",
   imagem: "image",
@@ -558,33 +580,6 @@ const englishOverrides: Record<string, string> = {
   desconhecido: "unknown",
 };
 
-const englishPatternOverrides: Array<[RegExp, string]> = [
-  [/^Nao foi possivel preparar o clipboard: (.+)$/u, "Could not prepare the clipboard: $1"],
-  [/^Falha ao acionar copia nativa: (.+)$/u, "Could not trigger the native copy action: $1"],
-  [/^O arquivo selecionado nao existe: (.+)$/u, "The selected file does not exist: $1"],
-  [/^Não foi possível abrir a base criptografada\. Verifique a credencial do ScryPuppy no Windows Credential Manager: (.+)$/u, "The encrypted database could not be opened. Check the ScryPuppy credential in Windows Credential Manager: $1"],
-  [/^Falha ao criptografar a base existente: (.+)$/u, "The existing database could not be encrypted: $1"],
-  [/^A cópia criptografada não pôde ser validada: (.+)$/u, "The encrypted copy could not be validated: $1"],
-  [/^Windows Credential Manager indisponível: (.+)$/u, "Windows Credential Manager is unavailable: $1"],
-  [/^Não foi possível salvar a chave no Windows Credential Manager: (.+)$/u, "The key could not be saved to Windows Credential Manager: $1"],
-  [/^Não foi possível ler o Windows Credential Manager: (.+)$/u, "Windows Credential Manager could not be read: $1"],
-  [/^Não foi possível salvar no Windows Credential Manager: (.+)$/u, "The credential could not be saved to Windows Credential Manager: $1"],
-  [/^Não foi possível remover do Windows Credential Manager: (.+)$/u, "The credential could not be removed from Windows Credential Manager: $1"],
-  [/^Imagem acima do limite local de OCR \((\d+)px\)\.$/u, "Image exceeds the local OCR limit ($1px)."],
-  [/^Provider nao suportado: (.+)$/u, "Unsupported provider: $1"],
-  [/^O provedor de IA falhou; foi usada a síntese local: (.+)$/u, "The AI provider failed; local synthesis was used: $1"],
-  [/^A análise de IA falhou; as sugestões locais continuam disponíveis: (.+)$/u, "AI analysis failed; local suggestions remain available: $1"],
-];
-
-function canonicalEnglish(value: string) {
-  const exact = englishOverrides[value];
-  if (exact) return exact;
-  for (const [pattern, replacement] of englishPatternOverrides) {
-    if (pattern.test(value)) return value.replace(pattern, replacement);
-  }
-  return value;
-}
-
 export function normalizeLanguage(value?: string | null): AppLanguage {
   return value === "pt-BR" ? "pt-BR" : "en";
 }
@@ -596,11 +591,12 @@ export function translate(
 ): string {
   const template = language === "pt-BR"
     ? portuguese[english] ?? english
-    : canonicalEnglish(english);
+    : legacySystemLabels[english] ?? english;
   return template.replace(/\{(\w+)\}/g, (_, key: string) => String(variables[key] ?? `{${key}}`));
 }
 
-export function translateGeneratedContent(language: AppLanguage, value: string): string {
+/** Compatibility-only parser for app labels persisted before structured metadata. */
+export function translateLegacyGeneratedContent(language: AppLanguage, value: string): string {
   const clipboardImage = value.match(/^\[(?:Imagem copiada do clipboard|Image copied from clipboard):\s*(\d+)x(\d+)\]$/iu);
   if (clipboardImage) {
     return translate(language, "[Image copied from clipboard: {width}x{height}]", {
@@ -612,3 +608,32 @@ export function translateGeneratedContent(language: AppLanguage, value: string):
   if (explorerImage) return translate(language, "Image saved from Explorer: {name}", { name: explorerImage[1] });
   return value;
 }
+
+function metadataRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+/**
+ * Builds app-generated labels from structured capture metadata. The text parser
+ * is only a compatibility fallback for captures created by older versions.
+ */
+export function captureDisplayText(language: AppLanguage, capture: Capture): string {
+  const metadata = metadataRecord(capture.metadata);
+  const clipboardImage = metadataRecord(metadata?.clipboard_image);
+  const width = clipboardImage?.width;
+  const height = clipboardImage?.height;
+  if ((typeof width === "number" || typeof width === "string")
+    && (typeof height === "number" || typeof height === "string")) {
+    return translate(language, "[Image copied from clipboard: {width}x{height}]", { width, height });
+  }
+
+  if (metadata?.imported_from_explorer === true && typeof metadata.file_name === "string") {
+    const isImage = capture.assets.some((asset) => asset.kind === "imported_image");
+    if (isImage) return translate(language, "Image saved from Explorer: {name}", { name: metadata.file_name });
+  }
+
+  return translateLegacyGeneratedContent(language, capture.content_text);
+}
+import type { Capture } from "./types";

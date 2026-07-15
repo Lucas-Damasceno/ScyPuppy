@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { save as saveFile } from "@tauri-apps/plugin-dialog";
 import * as api from "../../api/tauri";
+import { formatAppError, formatAppMessage } from "../../appMessages";
 import { MarkdownDocument } from "../../components/MarkdownDocument";
-import { translate, translateGeneratedContent, type AppLanguage } from "../../i18n";
+import { captureDisplayText, translate, translateLegacyGeneratedContent, type AppLanguage } from "../../i18n";
 import type { Capture, MagicSearchDocument, MagicSearchListItem } from "../../types";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
 import { LiteEmpty } from "./LiteEmpty";
@@ -76,7 +77,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
     try {
       applyDocument(await api.getMagicSearch(id));
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     } finally {
       setIsLoading(false);
     }
@@ -95,7 +96,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
         setTitleDraft("");
       }
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     } finally {
       setIsLoading(false);
     }
@@ -117,7 +118,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
         }
       }).catch((error) => {
         setSaveState("error");
-        onStatus(String(error));
+      onStatus(formatAppError(error, tr));
       });
     }, 700);
     return () => window.clearTimeout(timer);
@@ -139,7 +140,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
     const timer = window.setTimeout(() => {
       api.listCaptures({ context_id: null, search: sourceSearch.trim() || null, tag: null, limit: 20, offset: 0 })
         .then((captures) => { if (active) setSourceCandidates(captures); })
-        .catch((error) => { if (active) onStatus(String(error)); })
+        .catch((error) => { if (active) onStatus(formatAppError(error, tr)); })
         .finally(() => { if (active) setIsSourceLoading(false); });
     }, 250);
     return () => {
@@ -179,7 +180,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       });
       await refreshHistory(nextDocument.id);
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     } finally {
       setIsGenerating(false);
     }
@@ -198,7 +199,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       const path = await api.exportMagicSearch(current.id, destination);
       onStatus(tr("Document exported to {path}", { path }));
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     }
   }
 
@@ -216,7 +217,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       setHistory((items) => items.map((item) => item.root_id === renamed.root_id ? { ...item, title: renamed.title } : item));
       setIsRenaming(false);
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     }
   }
 
@@ -227,7 +228,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       await refreshHistory(null);
       onStatus(tr("Document deleted."));
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     }
   }
 
@@ -238,7 +239,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       await refreshHistory(cleaned.id);
       onStatus(tr("Old versions deleted."));
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     }
   }
 
@@ -252,7 +253,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       setHistory((items) => items.map((item) => item.id === updated.id ? { ...item, evidence_count: updated.evidence_count } : item));
       onStatus(tr("Source added as reference [{number}].", { number: updated.evidence.length }));
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     } finally {
       setSourceActionId(null);
     }
@@ -268,7 +269,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       setHistory((items) => items.map((item) => item.id === updated.id ? { ...item, evidence_count: updated.evidence_count } : item));
       onStatus(tr("Source removed and citations renumbered."));
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     } finally {
       setSourceActionId(null);
     }
@@ -292,7 +293,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
     try {
       setDetail(await api.getCapture(captureId));
     } catch (error) {
-      onStatus(String(error));
+      onStatus(formatAppError(error, tr));
     }
   }
 
@@ -365,7 +366,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
             {isSourceLoading && <span className="lite-source-loading"><LiteIcon name="loader" />{tr("Searching...")}</span>}
             {!isSourceLoading && availableSourceCandidates.map((capture) => <button key={capture.id} disabled={sourceActionId === capture.id} onClick={() => void addSource(capture.id)}>
               <span><LiteIcon name={sourceActionId === capture.id ? "loader" : "plus"} /></span>
-              <div><strong>{capture.source_app_name || tr("Unknown application")}</strong><p>{compactSource(translateGeneratedContent(language, capture.content_text))}</p></div>
+              <div><strong>{capture.source_app_name || tr("Unknown application")}</strong><p>{compactSource(captureDisplayText(language, capture))}</p></div>
             </button>)}
             {!isSourceLoading && availableSourceCandidates.length === 0 && <span className="lite-source-loading">{tr("No available captures found.")}</span>}
           </div>
@@ -375,7 +376,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
             {document.evidence.map((source, index) => <div className="lite-document-source-item" key={source.capture_id}>
               <button className="lite-document-source-open" onClick={() => void openSource(source.capture_id)}>
                 <span>{index + 1}</span>
-                <div><strong>{source.app_name || tr("Unknown application")}</strong><small>{source.window_title || formatDocumentDate(source.captured_at, language)}</small><p>{translateGeneratedContent(language, source.excerpt)}</p></div>
+                <div><strong>{source.app_name || tr("Unknown application")}</strong><small>{source.window_title || formatDocumentDate(source.captured_at, language)}</small><p>{translateLegacyGeneratedContent(language, source.excerpt)}</p></div>
               </button>
               <button className="lite-document-source-remove" disabled={sourceActionId === source.capture_id} onClick={() => setPendingConfirmation({ kind: "remove-source", captureId: source.capture_id, number: index + 1 })} aria-label={tr("Remove source [{number}]", { number: index + 1 })}><LiteIcon name={sourceActionId === source.capture_id ? "loader" : "close"} /></button>
             </div>)}
@@ -384,7 +385,7 @@ export function LiteDocumentsWorkspace({ language, requestedDocumentId, status, 
       </aside>
     </div>
 
-    {document.generation_warning && <div className="lite-document-warning"><LiteIcon name="info" />{tr(document.generation_warning)}</div>}
+    {document.generation_warning && <div className="lite-document-warning"><LiteIcon name="info" />{formatAppMessage(document.generation_warning, tr)}</div>}
     {detail && <CaptureDetailsDialog capture={detail} contexts={[]} language={language} readOnly onClose={() => setDetail(null)} onChanged={async () => undefined} onError={onStatus} />}
     {pendingConfirmation && confirmationCopy && <div className="lite-modal-backdrop" onMouseDown={(event) => {
       if (!isConfirming && event.currentTarget === event.target) setPendingConfirmation(null);

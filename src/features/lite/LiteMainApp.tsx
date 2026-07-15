@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as api from "../../api/tauri";
+import { formatAppError } from "../../appMessages";
 import { BrandMark } from "../../components/BrandMark";
 import { OnboardingTutorial } from "../../components/OnboardingTutorial";
 import { liteDefaultSettings } from "../../config/defaultSettings";
 import { useLiteWorkspace } from "../../hooks/useLiteWorkspace";
 import { useSettingsCoordinator } from "../../hooks/useSettingsCoordinator";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
-import { normalizeLanguage, translate, translateGeneratedContent } from "../../i18n";
+import { captureDisplayText, normalizeLanguage, translate } from "../../i18n";
 import type { AiProviderOption, Capture } from "../../types";
 import { AddItemsToContextDialog } from "./AddItemsToContextDialog";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
@@ -47,10 +48,6 @@ export function LiteMainApp() {
   const [aiOptions, setAiOptions] = useState<AiProviderOption[]>([]);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const captureListRef = useRef<HTMLDivElement>(null);
-  const { captures, captureTotal, contexts, counts, isLoading, refreshAll } = useLiteWorkspace(
-    { contextId: selectedContextId, search, page: capturePage },
-    setStatus,
-  );
   const {
     settings,
     patchSettings,
@@ -62,14 +59,19 @@ export function LiteMainApp() {
     awaitPendingSettings,
   } = useSettingsCoordinator(liteDefaultSettings);
   const language = normalizeLanguage(settings.language);
-  const selectedContext = contexts.find((context) => context.id === selectedContextId) ?? null;
-  const capturePageCount = Math.max(1, Math.ceil(captureTotal / capturePageSize));
-  const captureRangeStart = captureTotal === 0 ? 0 : (capturePage * capturePageSize) + 1;
-  const captureRangeEnd = captureTotal === 0 ? 0 : Math.min(captureRangeStart + captures.length - 1, captureTotal);
   const tr = useCallback(
     (english: string, variables?: Record<string, string | number>) => translate(language, english, variables),
     [language],
   );
+  const reportError = useCallback((error: unknown) => setStatus(formatAppError(error, tr)), [tr]);
+  const { captures, captureTotal, contexts, counts, isLoading, refreshAll } = useLiteWorkspace(
+    { contextId: selectedContextId, search, page: capturePage },
+    reportError,
+  );
+  const selectedContext = contexts.find((context) => context.id === selectedContextId) ?? null;
+  const capturePageCount = Math.max(1, Math.ceil(captureTotal / capturePageSize));
+  const captureRangeStart = captureTotal === 0 ? 0 : (capturePage * capturePageSize) + 1;
+  const captureRangeEnd = captureTotal === 0 ? 0 : Math.min(captureRangeStart + captures.length - 1, captureTotal);
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -79,9 +81,9 @@ export function LiteMainApp() {
     api.getSettings().then((persisted) => {
       loadPersisted(persisted);
       if (!persisted.onboarding_completed) setIsOnboardingOpen(true);
-    }).catch((error) => setStatus(String(error)));
-    api.getAiProviderOptions().then(setAiOptions).catch((error) => setStatus(String(error)));
-  }, [loadPersisted]);
+    }).catch(reportError);
+    api.getAiProviderOptions().then(setAiOptions).catch(reportError);
+  }, [loadPersisted, reportError]);
 
   useEffect(() => {
     setDetail((current) => current
@@ -115,7 +117,7 @@ export function LiteMainApp() {
       setCapturePage(0);
       await refreshAll({ contextId: context.id, search, page: 0 });
     } catch (error) {
-      setStatus(String(error));
+      reportError(error);
     } finally {
       setIsCreatingContext(false);
     }
@@ -131,7 +133,7 @@ export function LiteMainApp() {
     try {
       setDetail(await api.getCapture(capture.id) ?? capture);
     } catch (error) {
-      setStatus(String(error));
+      reportError(error);
     }
   }
 
@@ -146,7 +148,7 @@ export function LiteMainApp() {
     try {
       await api.openMagicSearchWindow(magicQuery);
     } catch (error) {
-      setStatus(String(error));
+      reportError(error);
     }
   }
 
@@ -154,7 +156,7 @@ export function LiteMainApp() {
     try {
       await api.openMagicSearchWindow(undefined, "document");
     } catch (error) {
-      setStatus(String(error));
+      reportError(error);
     }
   }
 
@@ -163,7 +165,7 @@ export function LiteMainApp() {
     try {
       setPersisted(await api.clearAiApiKey());
     } catch (error) {
-      setStatus(String(error));
+      reportError(error);
     }
   }
 
@@ -177,7 +179,7 @@ export function LiteMainApp() {
       setCapturePage(0);
       await refreshAll({ contextId: null, search: "", page: 0 });
     } catch (error) {
-      setStatus(String(error));
+      reportError(error);
     }
   }
 
@@ -322,15 +324,15 @@ export function LiteMainApp() {
                 <img src={convertFileSrc(imageAsset.path)} alt="" loading="lazy" />
               </button> : <span className="lite-capture-app">{appInitial(capture.source_app_name)}</span>}
               <div className="lite-capture-main">
-                <button className="lite-capture-content" onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => setStatus(String(error)))} title={tr("Copy")}>
-                  <strong>{compactContent(translateGeneratedContent(language, capture.content_text))}</strong>
+                <button className="lite-capture-content" onClick={() => api.copyCaptureToClipboard(capture.id).catch(reportError)} title={tr("Copy")}>
+                  <strong>{compactContent(captureDisplayText(language, capture))}</strong>
                   <small>{formatRelativeDate(capture.captured_at, language)}</small>
                 </button>
                 {capture.contexts.length > 0 && <div className="lite-capture-categories" title={capture.contexts.map((context) => context.name).join(", ")}>
                   {capture.contexts.map((context) => <span key={context.id}>{context.name}</span>)}
                 </div>}
               </div>
-              <button className="lite-icon-button" onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => setStatus(String(error)))} aria-label={tr("Copy")} title={tr("Copy")}>
+              <button className="lite-icon-button" onClick={() => api.copyCaptureToClipboard(capture.id).catch(reportError)} aria-label={tr("Copy")} title={tr("Copy")}>
                 <LiteIcon name="copy" />
               </button>
               <button className="lite-icon-button" onClick={() => void openDetails(capture)} aria-label={tr("View details")} title={tr("View details")}>

@@ -44,14 +44,14 @@ export type ChatAnswer = { answer: string; confidence: "high" | "medium" | "low"
 export type CaptureOrigin = "explicit_hotkey" | "clipboard_monitor" | "file_import";
 export type CaptureCreatedEvent = { capture: Capture; origin: CaptureOrigin };
 export type CaptureUpdatedEvent = { capture: Capture };
-export type CaptureErrorEvent = { message: string };
+export type CaptureErrorEvent = { error: AppMessagePayload };
 export type ContextSuggestion = {
   id: string; name: string; existing_context_id: string | null; capture_ids: string[];
   reason: string; confidence: number; source: "local" | "ai";
 };
 export type ContextAnalysisResult = {
   scanned_count: number; contextualized_count: number; suggestions: ContextSuggestion[];
-  unmatched_capture_ids: string[]; ai_message: string | null;
+  unmatched_capture_ids: string[]; ai_message: AppMessagePayload | null;
 };
 export type ApplyContextSuggestion = {
   suggestion_id: string; name: string; existing_context_id: string | null;
@@ -74,7 +74,7 @@ export type MagicSearchPreview = { evidence_count: number; available_count: numb
 export type MagicSearchDocument = {
   id: string; root_id: string; previous_document_id: string | null; version: number;
   title: string; query: string; markdown: string; provider: string; model: string;
-  filters: MagicSearchRequest; generation_warning: string | null;
+  filters: MagicSearchRequest; generation_warning: AppMessagePayload | null;
   evidence_count: number; created_at: string; evidence: EvidenceItem[];
   response_mode: "direct" | "brief" | "document"; sensitive_value: string | null;
   answer_value: string | null;
@@ -83,3 +83,4 @@ export type MagicSearchListItem = {
   id: string; root_id: string; version: number; title: string; query: string; provider: string;
   model: string; evidence_count: number; created_at: string; response_mode: "direct" | "brief" | "document";
 };
+import type { AppMessagePayload } from "./appMessages";

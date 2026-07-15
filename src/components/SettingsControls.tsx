@@ -1,8 +1,9 @@
 import { useEffect, useId, useState } from "react";
+import { formatAppError, type MessageParams } from "../appMessages";
 import type { AiProviderOption, Settings } from "../types";
 import type { SettingsSaveState } from "../hooks/useSettingsCoordinator";
 
-type Translate = (english: string) => string;
+type Translate = (english: string, variables?: MessageParams) => string;
 type PatchSettings = (patch: Partial<Settings>) => Promise<void>;
 
 export function ClipboardCaptureControls({ settings, tr, onPatch }: { settings: Settings; tr: Translate; onPatch: PatchSettings }) {
@@ -79,9 +80,9 @@ export function AiControls({ settings, options, tr, onPatch, onSaveCredential, o
   </div>;
 }
 
-export function SettingsSaveFeedback({ tr, state, error, onRetry }: { tr: Translate; state: SettingsSaveState; error: string | null; onRetry?: () => void }) {
+export function SettingsSaveFeedback({ tr, state, error, onRetry }: { tr: Translate; state: SettingsSaveState; error: unknown; onRetry?: () => void }) {
   if (state === "saving") return <span className="settings-save-feedback is-saving">{tr("Saving...")}</span>;
-  if (state === "error") return <span className="settings-save-feedback is-error">{tr("Could not save settings.")} {onRetry && <button type="button" onClick={onRetry}>{tr("Try again")}</button>} {error && <small>{tr(error)}</small>}</span>;
+  if (state === "error") return <span className="settings-save-feedback is-error">{tr("Could not save settings.")} {onRetry && <button type="button" onClick={onRetry}>{tr("Try again")}</button>} {error != null && <small>{formatAppError(error, tr)}</small>}</span>;
   if (state === "saved") return <span className="settings-save-feedback is-saved">{tr("Saved")}</span>;
   return null;
 }

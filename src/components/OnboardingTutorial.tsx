@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { MessageParams } from "../appMessages";
 import type { AiProviderOption, Settings } from "../types";
 import type { SettingsSaveState } from "../hooks/useSettingsCoordinator";
 import { AiControls, ClipboardCaptureControls, QuickContextControls, SettingsSaveFeedback } from "./SettingsControls";
 import { BrandMark } from "./BrandMark";
 
-type Translate = (english: string) => string;
+type Translate = (english: string, variables?: MessageParams) => string;
 type PatchSettings = (patch: Partial<Settings>) => Promise<void>;
 
 type OnboardingTutorialProps = {
@@ -17,7 +18,7 @@ type OnboardingTutorialProps = {
   onSaveCredential: (value: string) => Promise<void>;
   onClearCredential: () => Promise<void>;
   saveState: SettingsSaveState;
-  saveError: string | null;
+  saveError: unknown;
   onRetry: () => Promise<void>;
   awaitPending: () => Promise<void>;
   onFinish: () => void;

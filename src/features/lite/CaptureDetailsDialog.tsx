@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import * as api from "../../api/tauri";
-import { translate, translateGeneratedContent, type AppLanguage } from "../../i18n";
+import { formatAppError } from "../../appMessages";
+import { captureDisplayText, translate, type AppLanguage } from "../../i18n";
 import type { Capture, Context } from "../../types";
 import { formatDate } from "./formatters";
 import { LiteIcon } from "./LiteIcon";
@@ -39,7 +40,7 @@ export function CaptureDetailsDialog({
       else await api.addCaptureContexts(capture.id, [context.id]);
       await onChanged();
     } catch (error) {
-      onError(String(error));
+      onError(formatAppError(error, tr));
     }
   }
 
@@ -52,7 +53,7 @@ export function CaptureDetailsDialog({
       setNewContextName("");
       await onChanged();
     } catch (error) {
-      onError(String(error));
+      onError(formatAppError(error, tr));
     }
   }
 
@@ -63,7 +64,7 @@ export function CaptureDetailsDialog({
       onClose();
       await onChanged();
     } catch (error) {
-      onError(String(error));
+      onError(formatAppError(error, tr));
     }
   }
 
@@ -77,8 +78,8 @@ export function CaptureDetailsDialog({
 
         <div className="lite-detail-scroll">
           <section className="lite-detail-section">
-            <div className="lite-section-heading"><h3>{tr("Full text")}</h3><button onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => onError(String(error)))}><LiteIcon name="copy" />{tr("Copy")}</button></div>
-            <pre>{translateGeneratedContent(language, capture.content_text)}</pre>
+            <div className="lite-section-heading"><h3>{tr("Full text")}</h3><button onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => onError(formatAppError(error, tr)))}><LiteIcon name="copy" />{tr("Copy")}</button></div>
+            <pre>{captureDisplayText(language, capture)}</pre>
           </section>
 
           {!readOnly && <section className="lite-detail-section">

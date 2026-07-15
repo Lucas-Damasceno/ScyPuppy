@@ -3,12 +3,13 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import * as api from "./api/tauri";
+import { formatAppError, formatAppMessage } from "./appMessages";
 import { MarkdownDocument } from "./components/MarkdownDocument";
 import { OnboardingTutorial } from "./components/OnboardingTutorial";
 import { BrandMark } from "./components/BrandMark";
 import { AiControls, ClipboardCaptureControls, QuickContextControls, SettingsSaveFeedback, StartupAndShortcutsControls } from "./components/SettingsControls";
 import { useSettingsCoordinator } from "./hooks/useSettingsCoordinator";
-import { normalizeLanguage, translate, translateGeneratedContent, type AppLanguage } from "./i18n";
+import { captureDisplayText, normalizeLanguage, translate, translateLegacyGeneratedContent, type AppLanguage } from "./i18n";
 import { LiteMagicPalette, LiteMainApp } from "./LiteApp";
 import { appDefaultSettings } from "./config/defaultSettings";
 import type {
@@ -226,7 +227,7 @@ function PastePalette({ preview = false }: { preview?: boolean }) {
                   <span className="paste-result-app">{appInitial(item.source_app_name)}</span>
                 )}
                 <span className="paste-result-copy">
-                  <strong>{translateGeneratedContent(language, item.content_text).replace(/\s+/g, " ").trim()}</strong>
+                  <strong>{captureDisplayText(language, item).replace(/\s+/g, " ").trim()}</strong>
                   <span>{item.source_app_name ?? tr("Unknown application")} · {formatListDate(item.captured_at)}</span>
                 </span>
                 <span className="paste-result-kind">{item.kind === "reference" ? tr("Reference") : tr("Capture")}</span>
@@ -358,7 +359,7 @@ function QuickContextPanel() {
       const updated = await api.getCapture(currentId);
       if (updated && generation.current === currentId) setCapture(updated);
       reloadChoices().catch(() => undefined);
-    } catch (reason) { if (generation.current === currentId) setError(String(reason)); }
+    } catch (reason) { if (generation.current === currentId) setError(formatAppError(reason, tr)); }
     finally { if (generation.current === currentId) setSavingContextId(null); }
   }
 
@@ -375,7 +376,7 @@ function QuickContextPanel() {
       setSearch("");
       setActiveOption(0);
       await reloadChoices();
-    } catch (reason) { setError(String(reason)); }
+    } catch (reason) { setError(formatAppError(reason, tr)); }
     finally { setSavingContextId(null); }
   }
 
@@ -414,7 +415,7 @@ function QuickContextPanel() {
         <div className="quick-context-body">
           {settings.quick_context_show_preview && <div className="quick-context-preview">
             <span className="quick-context-preview-icon"><Icon name={isImageCapture ? "image" : "copy"} size={15} /></span>
-            <span className="quick-context-preview-copy"><strong>{tr(isImageCapture ? "Image capture" : "Capture")}</strong><small>{translateGeneratedContent(language, capture.content_text).replace(/^\[|\]$/g, "")}</small></span>
+            <span className="quick-context-preview-copy"><strong>{tr(isImageCapture ? "Image capture" : "Capture")}</strong><small>{captureDisplayText(language, capture).replace(/^\[|\]$/g, "")}</small></span>
           </div>}
           <div className="quick-context-search"><Icon name="search" size={14} /><input value={search} onChange={(event) => { setSearch(event.currentTarget.value); setActiveOption(0); }} onKeyDown={handleSearchKeyDown} onFocus={() => setIsSearching(true)} onBlur={() => setIsSearching(false)} placeholder={tr("Search or create a context")} aria-label={tr("Search contexts")} aria-controls="quick-context-options" aria-expanded={Boolean(search.trim() || isSearching)} autoComplete="off" spellCheck={false} />{search && <button onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearch(""); setActiveOption(0); }} aria-label={tr("Clear search")}><Icon name="close" size={12} /></button>}</div>
           <div className="quick-context-section-label"><span>{tr(normalizedSearch ? "Available contexts" : settings.quick_context_show_recent ? "Recent contexts" : "Contexts")}</span>{capture.contexts.length > 0 && <small>{capture.contexts.length} {tr("Assigned contexts").toLowerCase()}</small>}</div>
@@ -600,10 +601,10 @@ function MainApp() {
         loadPersisted(value);
         if (!value.onboarding_completed) setIsOnboardingOpen(true);
       })
-      .catch((error) => setStatus(String(error)));
+      .catch((error) => setStatus(formatAppError(error, tr)));
     api.getAiProviderOptions()
       .then(setAiOptions)
-      .catch((error) => setStatus(String(error)));
+      .catch((error) => setStatus(formatAppError(error, tr)));
     api.listMagicSearches().then(setMagicHistory).catch(() => undefined);
   }, []);
 
@@ -621,7 +622,7 @@ function MainApp() {
         if (requestId === tagDocumentRequestId.current) setTagDocument(document);
       })
       .catch((error) => {
-        if (requestId === tagDocumentRequestId.current) setStatus(String(error));
+        if (requestId === tagDocumentRequestId.current) setStatus(formatAppError(error, tr));
       })
       .finally(() => {
         if (requestId === tagDocumentRequestId.current) setIsTagDocumentLoading(false);
@@ -633,7 +634,7 @@ function MainApp() {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      refresh().catch((error) => setStatus(String(error)));
+      refresh().catch((error) => setStatus(formatAppError(error, tr)));
     }, 150);
 
     return () => window.clearTimeout(timeout);
@@ -660,20 +661,20 @@ function MainApp() {
         ? "Clipboard copy registered automatically."
         : isReference ? "Reference saved to the Content Base." : "Capture saved with the global shortcut.");
       if (isAutomatic) {
-        refresh().catch((error) => setStatus(String(error)));
+      refresh().catch((error) => setStatus(formatAppError(error, tr)));
         return;
       }
       setSelectedContextId(isReference ? contentBaseId : inboxId);
       setSelectedCaptureId(event.payload.capture.id);
-      refresh(isReference ? contentBaseId : inboxId).catch((error) => setStatus(String(error)));
+      refresh(isReference ? contentBaseId : inboxId).catch((error) => setStatus(formatAppError(error, tr)));
     }).then((unlisten) => unlisteners.push(unlisten));
 
     listen<CaptureErrorEvent>("capture-error", (event) => {
-      setStatus(event.payload.message);
+      setStatus(formatAppMessage(event.payload.error, tr));
     }).then((unlisten) => unlisteners.push(unlisten));
 
     listen<CaptureUpdatedEvent>("capture-analysis-updated", () => {
-      refresh().catch((error) => setStatus(String(error)));
+      refresh().catch((error) => setStatus(formatAppError(error, tr)));
     }).then((unlisten) => unlisteners.push(unlisten));
 
     return () => {
@@ -695,7 +696,7 @@ function MainApp() {
       setOrganizeCaptureMap(Object.fromEntries(loaded.filter((capture): capture is Capture => Boolean(capture)).map((capture) => [capture.id, capture])));
       setStatus("Context suggestions ready for review.");
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     } finally {
       setIsOrganizing(false);
     }
@@ -709,7 +710,7 @@ function MainApp() {
       setSelectedContextId(context.id);
       await refresh(context.id);
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -720,7 +721,7 @@ function MainApp() {
       await api.renameContext(context.id, name);
       await refresh(context.id);
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -737,7 +738,7 @@ function MainApp() {
       setSelectedContextId(inboxId);
       await refresh(inboxId);
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -748,7 +749,7 @@ function MainApp() {
       setContextPickerSearch("");
       await refresh(selectedContextId);
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -764,7 +765,7 @@ function MainApp() {
       await api.deleteCapture(selectedCapture.id);
       await refresh(selectedContextId);
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -773,7 +774,7 @@ function MainApp() {
       await api.resyncContexts();
       setStatus("Markdown resynchronized.");
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -797,7 +798,7 @@ function MainApp() {
       setChatAnswer(answer);
       setStatus("Local answer generated.");
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     } finally {
       setIsAsking(false);
     }
@@ -808,7 +809,7 @@ function MainApp() {
     try {
       await api.removeCaptureContext(selectedCapture.id, contextId);
       await refresh(selectedContextId);
-    } catch (error) { setStatus(String(error)); }
+    } catch (error) { setStatus(formatAppError(error, tr)); }
   }
 
   async function createContextForSelectedCapture() {
@@ -819,7 +820,7 @@ function MainApp() {
       await api.addCaptureContexts(selectedCapture.id, [context.id]);
       setContextPickerSearch("");
       await refresh(selectedContextId);
-    } catch (error) { setStatus(String(error)); }
+    } catch (error) { setStatus(formatAppError(error, tr)); }
   }
 
   async function applyOrganization() {
@@ -834,7 +835,7 @@ function MainApp() {
       setIsOrganizeOpen(false);
       setOrganizeResult(null);
       await refresh("all");
-    } catch (error) { setStatus(String(error)); } finally { setIsOrganizing(false); }
+    } catch (error) { setStatus(formatAppError(error, tr)); } finally { setIsOrganizing(false); }
   }
 
   function toggleSuggestion(id: string, selected: boolean) {
@@ -881,8 +882,8 @@ function MainApp() {
       setStatus("Magic Search complete.");
     } catch (error) {
       if (requestId !== magicRequestId.current) return;
-      setMagicError(String(error));
-      setStatus(String(error));
+      setMagicError(formatAppError(error, tr));
+      setStatus(formatAppError(error, tr));
     } finally {
       if (requestId === magicRequestId.current) setIsMagicGenerating(false);
     }
@@ -900,7 +901,7 @@ function MainApp() {
       setMagicError(null);
     } catch (error) {
       if (requestId !== magicRequestId.current) return;
-      setMagicError(String(error));
+      setMagicError(formatAppError(error, tr));
     } finally {
       if (requestId === magicRequestId.current) setIsMagicGenerating(false);
     }
@@ -918,7 +919,7 @@ function MainApp() {
       const path = await api.exportMagicSearch(magicDocument.id);
       setStatus(tr("Document exported to {path}", { path }));
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -928,7 +929,7 @@ function MainApp() {
       const path = await api.exportTagDocument(selectedCategory);
       setStatus(tr("Tag exported to {path}", { path }));
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -949,7 +950,7 @@ function MainApp() {
       setPersisted(next);
       setStatus("AI key removed from Windows Credential Manager.");
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     }
   }
 
@@ -970,7 +971,7 @@ function MainApp() {
       await refresh(inboxId);
       setStatus("All local data permanently deleted.");
     } catch (error) {
-      setStatus(String(error));
+      setStatus(formatAppError(error, tr));
     } finally {
       setIsDeletingAllData(false);
     }
@@ -1136,7 +1137,7 @@ function MainApp() {
                   <button
                     className={`sidebar-item ${selectedContextId === context.id ? "is-selected" : ""}`}
                     onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => { event.preventDefault(); const captureId = event.dataTransfer.getData("text/clipscry-capture"); if (captureId) api.addCaptureContexts(captureId, [context.id]).then(() => refresh(selectedContextId)).catch((error) => setStatus(String(error))); }}
+                    onDrop={(event) => { event.preventDefault(); const captureId = event.dataTransfer.getData("text/clipscry-capture"); if (captureId) api.addCaptureContexts(captureId, [context.id]).then(() => refresh(selectedContextId)).catch((error) => setStatus(formatAppError(error, tr))); }}
                     onClick={() => {
                       setSelectedCategory(null);
                       selectContext(context.id);
@@ -1226,7 +1227,7 @@ function MainApp() {
                 </div>
                 {tagViewMode === "document" && (
                   <div className="tag-document-actions">
-                    <button className="quiet-button" disabled={!tagDocument} onClick={() => tagDocument && api.copyTextToClipboard(tagDocument.markdown).catch((error) => setStatus(String(error)))}><Icon name="copy" size={13} /> {tr("Copy")}</button>
+                    <button className="quiet-button" disabled={!tagDocument} onClick={() => tagDocument && api.copyTextToClipboard(tagDocument.markdown).catch((error) => setStatus(formatAppError(error, tr)))}><Icon name="copy" size={13} /> {tr("Copy")}</button>
                     <button className="quiet-button" disabled={!tagDocument} onClick={exportCurrentTag}><Icon name="folder" size={13} /> {tr("Export")}</button>
                   </div>
                 )}
@@ -1265,7 +1266,7 @@ function MainApp() {
                     <time>{formatListDate(capture.captured_at)}</time>
                   </div>
                   <p className="capture-window">{capture.window_title ?? tr("Untitled window")}</p>
-                  <p className="capture-excerpt">{translateGeneratedContent(language, capture.content_text)}</p>
+                  <p className="capture-excerpt">{captureDisplayText(language, capture)}</p>
                   <div className="capture-row-footer">
                     <span>{capture.contexts.map((context) => context.name).join(", ") || (capture.kind === "reference" ? tr("Content Base") : "Inbox")}</span>
                     {capture.kind === "reference" && <code>{tr("reference")}</code>}
@@ -1349,11 +1350,11 @@ function MainApp() {
                       <span className="eyebrow">{tr("Captured content")}</span>
                       <h3>{selectedCapture.window_title ?? tr("Untitled selection")}</h3>
                     </div>
-                    <button className="quiet-button" onClick={() => api.copyCaptureToClipboard(selectedCapture.id).catch((error) => setStatus(String(error)))}>
+                    <button className="quiet-button" onClick={() => api.copyCaptureToClipboard(selectedCapture.id).catch((error) => setStatus(formatAppError(error, tr)))}>
                       <Icon name="copy" size={14} /> {tr("Copy")}
                     </button>
                   </div>
-                  <pre className="captured-content">{translateGeneratedContent(language, selectedCapture.content_text)}</pre>
+                  <pre className="captured-content">{captureDisplayText(language, selectedCapture)}</pre>
                   {selectedCapture.tags.length > 0 && (
                     <div className="tag-list">
                       {selectedCapture.tags.map((tag) => <code key={tag}>{tr(tag)}</code>)}
@@ -1421,7 +1422,7 @@ function MainApp() {
                                 <span className="app-avatar small">{appInitial(item.app_name)}</span>
                                 <span>
                                   <strong>{item.app_name ?? tr("Unknown application")}</strong>
-                                  <small>{translateGeneratedContent(language, item.excerpt)}</small>
+                                  <small>{translateLegacyGeneratedContent(language, item.excerpt)}</small>
                                 </span>
                                 <Icon name="chevron" size={14} />
                               </button>
@@ -1593,17 +1594,17 @@ function MainApp() {
                     <time>{formatDate(magicDocument.created_at)}</time>
                   </div>
                   {magicDocument.generation_warning && (
-                    <div className="magic-generation-warning"><Icon name="info" size={15} />{tr(magicDocument.generation_warning)}</div>
+                    <div className="magic-generation-warning"><Icon name="info" size={15} />{formatAppMessage(magicDocument.generation_warning, tr)}</div>
                   )}
                   <div className={`magic-answer-card is-${magicDocument.response_mode}`}>
-                    <button className="quiet-button magic-answer-copy" onClick={() => api.copyTextToClipboard(magicDocument.markdown).catch((error) => setStatus(String(error)))}><Icon name="copy" size={13} /> {tr("Copy")}</button>
+                    <button className="quiet-button magic-answer-copy" onClick={() => api.copyTextToClipboard(magicDocument.markdown).catch((error) => setStatus(formatAppError(error, tr)))}><Icon name="copy" size={13} /> {tr("Copy")}</button>
                     <MarkdownDocument source={magicDocument.markdown} className="magic-markdown" />
                   </div>
                   {magicDocument.sensitive_value && <div className="magic-secret-card">
                     <div><span>{tr("Protected credential")}</span><code>{isSensitiveValueRevealed ? magicDocument.sensitive_value : maskSensitiveValue(magicDocument.sensitive_value)}</code><small>{tr("This value stays local and is not saved in Magic Search history.")}</small></div>
                     <div>
                       <button className="secondary-button" onClick={() => setIsSensitiveValueRevealed((value) => !value)}><Icon name="eye" size={14} /> {tr(isSensitiveValueRevealed ? "Hide" : "Reveal")}</button>
-                      <button className="primary-button" onClick={() => api.copyTextToClipboard(magicDocument.sensitive_value!).catch((error) => setStatus(String(error)))}><Icon name="copy" size={14} /> {tr("Copy credential")}</button>
+                      <button className="primary-button" onClick={() => api.copyTextToClipboard(magicDocument.sensitive_value!).catch((error) => setStatus(formatAppError(error, tr)))}><Icon name="copy" size={14} /> {tr("Copy credential")}</button>
                     </div>
                   </div>}
                   <section className="magic-evidence-section">
@@ -1611,7 +1612,7 @@ function MainApp() {
                     <div className="magic-evidence-grid">
                       {magicDocument.evidence.slice(0, magicDocument.response_mode === "direct" ? 1 : undefined).map((item, index) => (
                         <button key={item.capture_id} onClick={() => { setIsMagicOpen(false); openEvidence(item.capture_id); }}>
-                          <span>{index + 1}</span><div><strong>{item.app_name ?? tr("Capture")}</strong><small>{translateGeneratedContent(language, item.excerpt)}</small></div><Icon name="chevron" size={13} />
+                          <span>{index + 1}</span><div><strong>{item.app_name ?? tr("Capture")}</strong><small>{translateLegacyGeneratedContent(language, item.excerpt)}</small></div><Icon name="chevron" size={13} />
                         </button>
                       ))}
                     </div>
@@ -1761,12 +1762,12 @@ function OrganizeContextsDialog({ language, days, useAi, working, result, contex
           </div>
           <p className="ai-disclosure organize-safety-note">{tr("ClipScry will analyze local identifiers and relationships to suggest context associations. No capture will be deleted or removed from an existing context.")}</p>
         </section> : <section className="organize-review">
-          <div className="organize-summary"><strong>{result.scanned_count} {tr("items analyzed")}</strong><span>{result.contextualized_count} {tr("already have contexts")} · {result.unmatched_capture_ids.length} {tr("uncertain or unmatched")}</span>{result.ai_message && <p>{tr(result.ai_message)}</p>}</div>
+          <div className="organize-summary"><strong>{result.scanned_count} {tr("items analyzed")}</strong><span>{result.contextualized_count} {tr("already have contexts")} · {result.unmatched_capture_ids.length} {tr("uncertain or unmatched")}</span>{result.ai_message && <p>{formatAppMessage(result.ai_message, tr)}</p>}</div>
           {result.suggestions.map((suggestion) => <article className="suggestion-card" key={suggestion.id}>
             <header><input type="checkbox" checked={selectedIds.has(suggestion.id)} onChange={(event) => onToggle(suggestion.id, event.currentTarget.checked)} /><div><input value={suggestion.name} disabled={Boolean(suggestion.existing_context_id)} onChange={(event) => onUpdate(suggestion.id, { name: event.currentTarget.value })} aria-label={tr("Suggested context name")} /><span>{suggestion.existing_context_id ? tr("Existing context") : tr("New context")} · {Math.round(suggestion.confidence * 100)}%</span></div></header>
             <p>{suggestion.reason}</p>
             <label><span>{tr("Apply to")}</span><select value={suggestion.existing_context_id ?? ""} onChange={(event) => onUpdate(suggestion.id, { existing_context_id: event.currentTarget.value || null, name: contexts.find((context) => context.id === event.currentTarget.value)?.name ?? suggestion.name })}><option value="">{tr("Create a new context")}</option>{contexts.map((context) => <option value={context.id} key={context.id}>{context.name}</option>)}</select></label>
-            <ul>{suggestion.capture_ids.map((captureId) => { const item = captureMap[captureId]; return <li key={captureId}><button onClick={() => onOpenCapture(captureId)}><strong>{item?.source_app_name ?? tr("Capture")}</strong><span>{item ? translateGeneratedContent(language, item.content_text).replace(/\s+/g, " ").slice(0, 100) : captureId}</span></button><button aria-label={tr("Remove capture from suggestion")} onClick={() => onRemoveCapture(suggestion.id, captureId)}>×</button></li>; })}</ul>
+            <ul>{suggestion.capture_ids.map((captureId) => { const item = captureMap[captureId]; return <li key={captureId}><button onClick={() => onOpenCapture(captureId)}><strong>{item?.source_app_name ?? tr("Capture")}</strong><span>{item ? captureDisplayText(language, item).replace(/\s+/g, " ").slice(0, 100) : captureId}</span></button><button aria-label={tr("Remove capture from suggestion")} onClick={() => onRemoveCapture(suggestion.id, captureId)}>×</button></li>; })}</ul>
           </article>)}
           {result.suggestions.length === 0 && <p className="muted-copy">{tr("No useful context suggestions were found. Your captures were left unchanged.")}</p>}
         </section>}
@@ -1901,7 +1902,7 @@ function AssetPreview({ asset, onPreview, language }: { asset: CaptureAsset; onP
         </button>
       )}
       {asset.path && <code>{asset.path}</code>}
-      {asset.error && <span>{translate(language, asset.error)}</span>}
+      {asset.error && <span>{formatAppError(asset.error, (english, variables) => translate(language, english, variables))}</span>}
     </li>
   );
 }

@@ -5,14 +5,10 @@ import type { Settings } from "../types";
 
 export type SettingsSaveState = "idle" | "saving" | "saved" | "error";
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function useSettingsCoordinator(initial: Settings) {
   const [settings, setSettings] = useState(initial);
   const [saveState, setSaveState] = useState<SettingsSaveState>("idle");
-  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<unknown>(null);
   const settingsRef = useRef(initial);
   const versionRef = useRef(0);
   const queueRef = useRef<Promise<void>>(Promise.resolve());
@@ -52,7 +48,7 @@ export function useSettingsCoordinator(initial: Settings) {
       } catch (error) {
         if (version === versionRef.current) {
           setSaveState("error");
-          setSaveError(errorMessage(error));
+          setSaveError(error);
           try {
             const persisted = await api.getSettings();
             if (version === versionRef.current) updateOptimistic(persisted);
