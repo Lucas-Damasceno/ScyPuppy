@@ -199,6 +199,7 @@ const defaultSettings = appDefaultSettings;
 function QuickContextPanel() {
   const [capture, setCapture] = useState<Capture | null>(null);
   const [contexts, setContexts] = useState<Context[]>([]);
+  const [recentContexts, setRecentContexts] = useState<Context[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [language, setLanguage] = useState<AppLanguage>("en");
   const [search, setSearch] = useState("");
@@ -212,8 +213,12 @@ function QuickContextPanel() {
   const tr = (english: string) => translate(language, english);
 
   const reloadChoices = useCallback(async () => {
-    const workspace = await api.loadWorkspace({ context_id: null, search: null, tag: null, limit: 1, offset: 0 });
+    const [workspace, recent] = await Promise.all([
+      api.loadWorkspace({ context_id: null, search: null, tag: null, limit: 1, offset: 0 }),
+      api.recentContexts().catch(() => []),
+    ]);
     setContexts(workspace.contexts);
+    setRecentContexts(recent);
   }, []);
 
   useEffect(() => {
@@ -288,10 +293,16 @@ function QuickContextPanel() {
   }
 
   if (!capture) return <main className="quick-context-shell" />;
-  const filtered = contexts.filter((context) => context.name.toLowerCase().includes(search.trim().toLowerCase()));
-  const visibleContexts = filtered.slice(0, 8);
+  const normalizedSearch = search.trim().toLowerCase();
+  const defaultChoices = settings.quick_context_show_recent && recentContexts.length > 0
+    ? [...capture.contexts, ...recentContexts].filter((context, index, values) => values.findIndex((item) => item.id === context.id) === index)
+    : contexts;
+  const choicePool = normalizedSearch ? contexts : defaultChoices;
+  const filtered = choicePool.filter((context) => context.name.toLowerCase().includes(normalizedSearch));
+  const visibleContexts = filtered.slice(0, settings.quick_context_show_preview ? 4 : 6);
   const canCreate = Boolean(search.trim()) && !contexts.some((context) => context.normalized_name === search.trim().toLowerCase());
   const optionCount = visibleContexts.length + (canCreate ? 1 : 0);
+  const isImageCapture = capture.assets.some((asset) => ["clipboard_image", "imported_image"].includes(asset.kind));
 
   function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -310,16 +321,27 @@ function QuickContextPanel() {
       <section className="quick-context-panel" aria-label={tr("Quick context panel")} onPointerEnter={() => setIsPointerInside(true)} onPointerLeave={() => setIsPointerInside(false)} onFocusCapture={() => setHasFocusWithin(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHasFocusWithin(false); }}>
         <header>
           <div className="quick-context-brand"><BrandMark /></div>
-          <div className="quick-context-title"><span>{tr("Capture saved")}</span><strong>{capture.source_app_name ?? tr("Unknown application")}</strong></div>
+          <div className="quick-context-title"><span><Icon name="check" size={11} />{tr("Capture saved")}</span><strong>{capture.source_app_name ?? tr("Unknown application")}</strong></div>
           <button className="quick-context-close" onClick={() => api.closeQuickContext()} aria-label={tr("Close")}><Icon name="close" size={14} /></button>
         </header>
         <div className="quick-context-body">
-          {capture.contexts.length > 0 && <div className="quick-context-chips" aria-label={tr("Assigned contexts")}>{capture.contexts.map((context) => <button key={context.id} onClick={() => toggleContext(context)} disabled={Boolean(savingContextId)} aria-label={`${tr("Remove context")}: ${context.name}`}>{context.name}<Icon name="close" size={10} /></button>)}</div>}
-          <div className="quick-context-search"><Icon name="search" size={14} /><input value={search} onChange={(event) => { setSearch(event.currentTarget.value); setActiveOption(0); }} onKeyDown={handleSearchKeyDown} onFocus={() => setIsSearching(true)} onBlur={() => setIsSearching(false)} placeholder={tr("Search or create a context")} aria-label={tr("Search contexts")} aria-controls="quick-context-options" aria-expanded={Boolean(search.trim() || isSearching)} autoComplete="off" spellCheck={false} /></div>
-          <div id="quick-context-options" className="quick-context-options" role="listbox">{visibleContexts.map((context, index) => <button key={context.id} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveOption(index)} onClick={() => toggleContext(context)} disabled={Boolean(savingContextId)} className={`${capture.contexts.some((item) => item.id === context.id) ? "is-selected" : ""} ${activeOption === index ? "is-active" : ""}`} role="option" aria-selected={capture.contexts.some((item) => item.id === context.id)}><span>{context.name}</span><span aria-hidden="true">{capture.contexts.some((item) => item.id === context.id) ? "✓" : "+"}</span></button>)}{canCreate && <button onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveOption(visibleContexts.length)} onClick={createInline} disabled={Boolean(savingContextId)} className={activeOption === visibleContexts.length ? "is-active" : ""} role="option" aria-selected={false}><span>{tr("Create context")} “{search.trim()}”</span><span aria-hidden="true">↵</span></button>}{!optionCount && <p className="quick-context-empty">{tr("No matching contexts")}</p>}</div>
-          {error && <p className="quick-context-error">{error}</p>}
+          {settings.quick_context_show_preview && <div className="quick-context-preview">
+            <span className="quick-context-preview-icon"><Icon name={isImageCapture ? "image" : "copy"} size={15} /></span>
+            <span className="quick-context-preview-copy"><strong>{tr(isImageCapture ? "Image capture" : "Capture")}</strong><small>{capture.content_text.replace(/^\[|\]$/g, "")}</small></span>
+          </div>}
+          <div className="quick-context-search"><Icon name="search" size={14} /><input value={search} onChange={(event) => { setSearch(event.currentTarget.value); setActiveOption(0); }} onKeyDown={handleSearchKeyDown} onFocus={() => setIsSearching(true)} onBlur={() => setIsSearching(false)} placeholder={tr("Search or create a context")} aria-label={tr("Search contexts")} aria-controls="quick-context-options" aria-expanded={Boolean(search.trim() || isSearching)} autoComplete="off" spellCheck={false} />{search && <button onMouseDown={(event) => event.preventDefault()} onClick={() => { setSearch(""); setActiveOption(0); }} aria-label={tr("Clear search")}><Icon name="close" size={12} /></button>}</div>
+          <div className="quick-context-section-label"><span>{tr(normalizedSearch ? "Available contexts" : settings.quick_context_show_recent ? "Recent contexts" : "Contexts")}</span>{capture.contexts.length > 0 && <small>{capture.contexts.length} {tr("Assigned contexts").toLowerCase()}</small>}</div>
+          <div id="quick-context-options" className="quick-context-options" role="listbox">
+            {visibleContexts.map((context, index) => {
+              const assigned = capture.contexts.some((item) => item.id === context.id);
+              return <button key={context.id} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveOption(index)} onClick={() => toggleContext(context)} disabled={Boolean(savingContextId)} className={`${assigned ? "is-selected" : ""} ${activeOption === index ? "is-active" : ""}`} role="option" aria-selected={assigned} aria-label={`${tr(assigned ? "Remove context" : "Add to this capture")}: ${context.name}`}><span className="quick-context-option-name"><Icon name="folder" size={13} /><span>{context.name}</span></span><span className="quick-context-option-action" aria-hidden="true">{savingContextId === context.id ? <Icon name="loader" size={13} /> : <Icon name={assigned ? "check" : "plus"} size={13} />}</span></button>;
+            })}
+            {canCreate && <button onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => setActiveOption(visibleContexts.length)} onClick={createInline} disabled={Boolean(savingContextId)} className={`quick-context-create ${activeOption === visibleContexts.length ? "is-active" : ""}`} role="option" aria-selected={false}><span className="quick-context-option-name"><Icon name="plus" size={13} /><span>{tr("Create context")} <strong>{search.trim()}</strong></span></span><Icon name="arrow" size={13} /></button>}
+            {!optionCount && <p className="quick-context-empty">{tr("No matching contexts")}</p>}
+          </div>
+          {error && <p className="quick-context-error" role="alert"><Icon name="info" size={12} />{error}</p>}
         </div>
-        <footer><span>{savingContextId ? tr("Saving...") : tr("Your capture is already saved.")}</span><button onClick={() => api.closeQuickContext()} disabled={Boolean(savingContextId)}>{tr("Done")}</button></footer>
+        <footer><span className="quick-context-save-state" aria-live="polite">{savingContextId ? <Icon name="loader" size={12} /> : <Icon name="check" size={12} />} {tr(savingContextId ? "Saving..." : "Saved locally")}</span><button onClick={() => api.closeQuickContext()} disabled={Boolean(savingContextId)}>{tr("Done")}</button></footer>
       </section>
     </main>
   );
@@ -1240,7 +1262,7 @@ function MainApp() {
                       <span className="eyebrow">{tr("Captured content")}</span>
                       <h3>{selectedCapture.window_title ?? tr("Untitled selection")}</h3>
                     </div>
-                    <button className="quiet-button" onClick={() => api.copyTextToClipboard(selectedCapture.content_text).catch((error) => setStatus(String(error)))}>
+                    <button className="quiet-button" onClick={() => api.copyCaptureToClipboard(selectedCapture.id).catch((error) => setStatus(String(error)))}>
                       <Icon name="copy" size={14} /> {tr("Copy")}
                     </button>
                   </div>
@@ -1800,6 +1822,7 @@ function AssetPreview({ asset, onPreview, language }: { asset: CaptureAsset; onP
 type IconName =
   | "arrow"
   | "capture"
+  | "check"
   | "chevron"
   | "close"
   | "copy"
@@ -1826,6 +1849,7 @@ type IconName =
 const iconPaths: Record<IconName, string[]> = {
   arrow: ["M5 12h14", "m13-6 6 6-6 6"],
   capture: ["M8 3H5a2 2 0 0 0-2 2v3", "M16 3h3a2 2 0 0 1 2 2v3", "M8 21H5a2 2 0 0 1-2-2v-3", "M16 21h3a2 2 0 0 0 2-2v-3", "M12 8v8", "M8 12h8"],
+  check: ["m5 12 4 4L19 6"],
   chevron: ["m9 18 6-6-6-6"],
   close: ["M18 6 6 18", "m6 6 12 12"],
   copy: ["M9 9h11v11H9z", "M4 15V4h11"],

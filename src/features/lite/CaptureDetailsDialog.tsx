@@ -77,7 +77,7 @@ export function CaptureDetailsDialog({
 
         <div className="lite-detail-scroll">
           <section className="lite-detail-section">
-            <div className="lite-section-heading"><h3>{tr("Full text")}</h3><button onClick={() => api.copyTextToClipboard(capture.content_text).catch((error) => onError(String(error)))}><LiteIcon name="copy" />{tr("Copy")}</button></div>
+            <div className="lite-section-heading"><h3>{tr("Full text")}</h3><button onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => onError(String(error)))}><LiteIcon name="copy" />{tr("Copy")}</button></div>
             <pre>{capture.content_text}</pre>
           </section>
 

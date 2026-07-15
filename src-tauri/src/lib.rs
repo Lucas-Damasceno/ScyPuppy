@@ -560,6 +560,14 @@ fn copy_text_to_clipboard(state: State<AppState>, text: String) -> Result<(), St
 }
 
 #[tauri::command]
+async fn copy_capture_to_clipboard(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || copy_capture_to_clipboard_core(&state, &id))
+        .await
+        .map_err(err)?
+}
+
+#[tauri::command]
 fn list_captures(
     state: State<AppState>,
     filter: Option<CaptureFilter>,
@@ -1462,6 +1470,22 @@ fn open_magic_document(app: AppHandle, id: String) -> Result<(), String> {
 fn paste_capture_core(app: &AppHandle, state: &AppState, id: &str) -> Result<(), String> {
     let conn = open_conn(state)?;
     let capture = get_capture_by_id(&conn, id)?;
+    write_capture_to_clipboard(state, &capture)?;
+
+    if let Some(window) = app.get_webview_window("paste") {
+        window.hide().map_err(err)?;
+    }
+    restore_paste_target(state);
+    simulate_paste()
+}
+
+fn copy_capture_to_clipboard_core(state: &AppState, id: &str) -> Result<(), String> {
+    let conn = open_conn(state)?;
+    let capture = get_capture_by_id(&conn, id)?;
+    write_capture_to_clipboard(state, &capture)
+}
+
+fn write_capture_to_clipboard(state: &AppState, capture: &CaptureDto) -> Result<(), String> {
     let image_path = capture
         .assets
         .iter()
@@ -1488,11 +1512,7 @@ fn paste_capture_core(app: &AppHandle, state: &AppState, id: &str) -> Result<(),
         write_clipboard_text(state, &capture.content_text).map_err(err)?;
     }
 
-    if let Some(window) = app.get_webview_window("paste") {
-        window.hide().map_err(err)?;
-    }
-    restore_paste_target(state);
-    simulate_paste()
+    Ok(())
 }
 
 fn show_paste_palette(app: &AppHandle, state: &AppState) -> Result<(), String> {
@@ -1554,7 +1574,7 @@ fn show_quick_context(
         .ok_or_else(|| "Quick context window is unavailable.".to_string())?;
     window
         .set_size(tauri::LogicalSize::new(
-            370.0,
+            384.0,
             quick_context_window_height(settings),
         ))
         .map_err(err)?;
@@ -1585,7 +1605,6 @@ fn show_quick_context(
         tauri::PhysicalPosition::new(0, 0)
     };
     window.set_position(position).map_err(err)?;
-    window.show().map_err(err)?;
     window
         .emit(
             "quick-context-capture",
@@ -1593,14 +1612,15 @@ fn show_quick_context(
                 capture: capture.clone(),
             },
         )
-        .map_err(err)
+        .map_err(err)?;
+    window.show().map_err(err)
 }
 
 fn quick_context_window_height(settings: &SettingsDto) -> f64 {
     if settings.quick_context_show_preview || settings.quick_context_show_recent {
-        280.0
+        320.0
     } else {
-        210.0
+        256.0
     }
 }
 
@@ -1672,6 +1692,47 @@ fn restore_main_window(app: &AppHandle) {
         let _ = window.show();
         let _ = window.set_focus();
     }
+}
+
+#[cfg(target_os = "windows")]
+fn setup_windows_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    use tauri::{
+        menu::{Menu, MenuItem},
+        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    };
+
+    let open_item = MenuItem::with_id(app, "tray-open", "Open ScryPuppy", true, None::<&str>)?;
+    let quit_item = MenuItem::with_id(app, "tray-quit", "Quit ScryPuppy", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open_item, &quit_item])?;
+
+    let mut tray = TrayIconBuilder::with_id("scrypuppy-tray")
+        .tooltip("ScryPuppy")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id().as_ref() {
+            "tray-open" => restore_main_window(app),
+            "tray-quit" => {
+                app.state::<AppState>().clipboard_monitor.shutdown();
+                app.exit(0);
+            }
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                restore_main_window(tray.app_handle());
+            }
+        });
+
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
 }
 
 #[cfg(target_os = "windows")]
@@ -1844,17 +1905,12 @@ fn persist_clipboard_payload(
     }
 
     let settings = settings_from_conn(&transaction, &state)?;
-    if screenshot_enabled(&settings, origin, capture_kind) {
-        insert_screenshot_asset(&transaction, &state, &capture_id, &active_window)?;
-    }
-    process_local_analysis(&transaction, &capture_id)?;
-    enqueue_ocr_job(&transaction, &capture_id)?;
     transaction.commit().map_err(err)?;
-    kick_ocr_worker(app.clone(), state.clone());
 
-    sync_contexts_best_effort(&state, &[context_id.to_string()]);
-
-    let capture = get_capture_by_id(&conn, &capture_id)?;
+    // The quick panel only needs the committed capture and its initial context.
+    // Display it before screenshot capture, local analysis, OCR queueing, and
+    // Markdown synchronization, which can be noticeably slower on Windows.
+    let mut capture = get_capture_by_id(&conn, &capture_id)?;
     let _ = app.emit(
         "capture-created",
         CaptureCreatedEvent {
@@ -1867,6 +1923,33 @@ fn persist_clipboard_payload(
             eprintln!("Quick context panel could not be displayed: {error}");
         }
     }
+
+    let postprocess_result = (|| -> Result<(), String> {
+        let transaction = conn.transaction().map_err(err)?;
+        if screenshot_enabled(&settings, origin, capture_kind) {
+            insert_screenshot_asset(&transaction, &state, &capture_id, &active_window)?;
+        }
+        process_local_analysis(&transaction, &capture_id)?;
+        enqueue_ocr_job(&transaction, &capture_id)?;
+        transaction.commit().map_err(err)
+    })();
+
+    if let Err(error) = postprocess_result {
+        eprintln!("Capture {capture_id} was saved, but background enrichment failed: {error}");
+    } else {
+        kick_ocr_worker(app.clone(), state.clone());
+        if let Ok(updated) = get_capture_by_id(&conn, &capture_id) {
+            capture = updated;
+            let _ = app.emit(
+                "capture-analysis-updated",
+                CaptureUpdatedEvent {
+                    capture: capture.clone(),
+                },
+            );
+        }
+    }
+
+    sync_contexts_best_effort(&state, &[context_id.to_string()]);
 
     Ok(capture)
 }
@@ -6726,6 +6809,9 @@ pub fn run() {
             initialize_database(&state).map_err(io_other)?;
             app.manage(state.clone());
 
+            #[cfg(target_os = "windows")]
+            setup_windows_tray(app)?;
+
             // Commands can run as soon as the first webview is built. Register every
             // plugin state they access before creating any configured window.
             #[cfg(all(desktop, target_os = "windows"))]
@@ -6827,6 +6913,7 @@ pub fn run() {
             run_capture,
             save_reference,
             copy_text_to_clipboard,
+            copy_capture_to_clipboard,
             list_captures,
             get_capture,
             delete_capture,
@@ -7196,10 +7283,10 @@ mod tests {
     #[test]
     fn quick_context_window_compacts_without_optional_content() {
         let mut settings = test_settings();
-        assert_eq!(quick_context_window_height(&settings), 280.0);
+        assert_eq!(quick_context_window_height(&settings), 320.0);
         settings.quick_context_show_preview = false;
         settings.quick_context_show_recent = false;
-        assert_eq!(quick_context_window_height(&settings), 210.0);
+        assert_eq!(quick_context_window_height(&settings), 256.0);
     }
 
     #[test]

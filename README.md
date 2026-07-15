@@ -17,7 +17,7 @@ Capture useful information, keep its source, organize it into Contexts, and turn
 </div>
 
 > [!NOTE]
-> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.2`.
+> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.3`.
 
 ![ScryPuppy main workspace](docs/screenshots/scrypuppy-main.png)
 
@@ -63,6 +63,7 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 ## Highlights
 
 - Explicit shortcuts for regular captures and durable references.
+- Windows tray access while ScryPuppy is running, including a full **Quit ScryPuppy** action.
 - Optional native monitoring for ordinary Windows clipboard copies.
 - Text, image, source application, window metadata, and local OCR support.
 - Many-to-many Context organization: one capture can belong to several Contexts.
@@ -98,6 +99,8 @@ The exact application-data directory is shown in Settings. During uninstall, the
 | `Ctrl + Shift + V` | Open Quick Paste history |
 
 After an explicit capture, Quick Context can assign one or several Contexts. The capture is saved before that panel appears, so dismissing the panel never discards it.
+
+Closing the main window keeps ScryPuppy available from the Windows tray for shortcuts and clipboard features. Use **Quit ScryPuppy** from the tray menu to stop the background process completely.
 
 ## Install
 

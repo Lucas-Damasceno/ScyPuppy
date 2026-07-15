@@ -22,6 +22,7 @@ export const getSettings = () => invoke<Settings>("get_settings");
 export const getAiProviderOptions = () => invoke<AiProviderOption[]>("get_ai_provider_options");
 export const runCapture = () => invoke<Capture>("run_capture");
 export const copyTextToClipboard = (text: string) => invoke<void>("copy_text_to_clipboard", { text });
+export const copyCaptureToClipboard = (id: string) => invoke<void>("copy_capture_to_clipboard", { id });
 export const analyzeContexts = (days: number, includeAi: boolean) => invoke<ContextAnalysisResult>("analyze_contexts", { request: { days, include_ai: includeAi } });
 export const applyContextSuggestions = (suggestions: ApplyContextSuggestion[]) => invoke<ApplyContextSuggestionsResult>("apply_context_suggestions", { suggestions });
 export const createContext = (name: string) => invoke<Context>("create_context", { name });

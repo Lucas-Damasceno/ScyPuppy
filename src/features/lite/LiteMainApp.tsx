@@ -301,7 +301,7 @@ export function LiteMainApp() {
                 <img src={convertFileSrc(imageAsset.path)} alt="" loading="lazy" />
               </button> : <span className="lite-capture-app">{appInitial(capture.source_app_name)}</span>}
               <div className="lite-capture-main">
-                <button className="lite-capture-content" onClick={() => api.copyTextToClipboard(capture.content_text).catch((error) => setStatus(String(error)))} title={tr("Copy")}>
+                <button className="lite-capture-content" onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => setStatus(String(error)))} title={tr("Copy")}>
                   <strong>{compactContent(capture.content_text)}</strong>
                   <small>{formatRelativeDate(capture.captured_at, language)}</small>
                 </button>
@@ -309,7 +309,7 @@ export function LiteMainApp() {
                   {capture.contexts.map((context) => <span key={context.id}>{context.name}</span>)}
                 </div>}
               </div>
-              <button className="lite-icon-button" onClick={() => api.copyTextToClipboard(capture.content_text).catch((error) => setStatus(String(error)))} aria-label={tr("Copy")} title={tr("Copy")}>
+              <button className="lite-icon-button" onClick={() => api.copyCaptureToClipboard(capture.id).catch((error) => setStatus(String(error)))} aria-label={tr("Copy")} title={tr("Copy")}>
                 <LiteIcon name="copy" />
               </button>
               <button className="lite-icon-button" onClick={() => void openDetails(capture)} aria-label={tr("View details")} title={tr("View details")}>

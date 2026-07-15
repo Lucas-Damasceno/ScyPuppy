@@ -7,6 +7,8 @@ This document describes the Windows-first ScryPuppy 1.0 Beta implementation. The
 ```mermaid
 flowchart LR
     User[Windows user] --> Shortcuts[Global shortcuts]
+    User --> Tray[Windows system tray]
+    Tray --> Rust[Rust and Tauri backend]
     Shortcuts --> Rust[Rust and Tauri backend]
     ClipboardListener[Native clipboard listener] --> Rust
     React[React windows] -->|typed commands and events| Rust
@@ -26,7 +28,7 @@ Window definitions live in `src-tauri/tauri.conf.json`.
 
 | Surface | Label | Purpose | Behavior |
 | --- | --- | --- | --- |
-| Main workspace | `main` | Browse captures, Contexts, documents, and Settings | Standard 1100×720 window |
+| Main workspace | `main` | Browse captures, Contexts, documents, and Settings | Standard 1100×720 window; closing hides it while the tray process remains available |
 | Quick Paste | `paste` | Search and paste clipboard history | Frameless, always on top, keyboard focused |
 | Quick Context | `quick-context` | Associate a newly saved capture | Frameless, always on top, avoids stealing focus initially |
 | Ask ScryPuppy | `magic-search` | Return a focused answer or create a cited document | Frameless, resizable, always on top |
@@ -81,11 +83,13 @@ sequenceDiagram
     R->>C: Read text or image
     R->>R: Collect foreground metadata
     R->>R: Detect recent duplicate
-    R->>D: Persist capture, entities, and assets
+    R->>D: Commit the capture and required clipboard-image asset
+    R-->>Q: Emit committed capture and show immediately
+    R->>D: Enrich with screenshot, entities, tags, and OCR queue
     opt Supported image
         R->>D: Queue local OCR job
     end
-    R-->>Q: Emit final capture ID after commit
+    R-->>Q: Emit the enriched capture update
 ```
 
 Important guarantees:
@@ -95,6 +99,11 @@ Important guarantees:
 - Duplicate or failed captures do not open Quick Context.
 - Internal clipboard writes and Quick Paste restoration do not create captures.
 - A capture ID and generation guard prevent delayed overlay events from mutating the wrong record.
+- Screenshot capture, deterministic analysis, OCR queueing, and encrypted Context-file synchronization run after the overlay becomes available, so they do not delay its first paint.
+
+### Windows tray lifecycle
+
+The Tauri process creates one tray icon from the configured ScryPuppy application icon. A left click restores and focuses the main window. The native menu can also open the workspace or quit the application. Closing the main window only hides it; **Quit ScryPuppy** shuts down the clipboard listener and calls Tauri's process-level exit API.
 
 ### Optional clipboard monitor
 
