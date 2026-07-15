@@ -33,14 +33,6 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
 
-pub(crate) fn image_sha256_hex(width: usize, height: usize, bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(width.to_le_bytes());
-    hasher.update(height.to_le_bytes());
-    hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
-}
-
 fn hex_key_to_bytes(value: &str) -> Result<[u8; 32], String> {
     if value.len() != 64 || !value.chars().all(|character| character.is_ascii_hexdigit()) {
         return Err("Chave de contexto inválida.".into());

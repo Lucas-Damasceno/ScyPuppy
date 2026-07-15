@@ -15,13 +15,28 @@ export type ContextAssignment = Context & {
 export type Category = { tag: string; capture_count: number };
 export type LibraryCounts = { all: number; inbox: number; content_base: number };
 export type CaptureAsset = { id: string; kind: string; path: string | null; status: string; error: string | null; created_at: string };
+export type CaptureRepresentation = {
+  id: string; kind: "plain_text" | "html" | "rich_text" | "url" | "image" | "files" | string;
+  format_name: string; mime_type: string | null; text_content: string | null; asset_path: string | null;
+  size_bytes: number | null; sha256: string | null; restorable: boolean; metadata: unknown;
+};
+export type CaptureFile = {
+  id: string; representation_id: string; ordinal: number; display_name: string;
+  original_path: string | null; local_path: string | null;
+  entry_kind: "file" | "directory" | "application" | "shortcut" | "virtual_file" | string;
+  extension: string | null; size_bytes: number | null; sha256: string | null;
+  availability: "available" | "missing" | "unverified" | "too_large" | "unreadable" | string;
+  metadata: unknown;
+};
+export type CaptureClipboardFormat = { id: number; name: string; supported: boolean };
 export type CaptureEntity = { id: string; kind: string; value: string; source: string; confidence: number };
 export type CaptureOcr = { status: string; text: string | null; error: string | null; updated_at: string };
 export type Capture = {
   id: string; content_text: string; captured_at: string;
   source_app_name: string | null; source_app_id: string | null; source_process_id: number | null;
   source_process_path: string | null; window_title: string | null; window_id: string | null;
-  platform: string; kind: string; metadata: unknown; assets: CaptureAsset[]; tags: string[];
+  platform: string; kind: string; content_kind: string; metadata: unknown; assets: CaptureAsset[];
+  representations: CaptureRepresentation[]; files: CaptureFile[]; clipboard_formats: CaptureClipboardFormat[]; tags: string[];
   entities: CaptureEntity[]; ocr: CaptureOcr | null; contexts: ContextAssignment[];
 };
 export type Settings = {
