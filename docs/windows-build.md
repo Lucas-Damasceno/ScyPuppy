@@ -1,8 +1,21 @@
-# Windows release build
+# Windows build and release
 
 This guide documents the supported ScryPuppy 1.0 Beta packaging path.
 
-## Build command
+## Supported release path
+
+Public builds are produced by `.github/workflows/windows-release.yml` on a standard
+GitHub-hosted Windows runner. Pull requests that affect the application or release
+pipeline run the complete validation and packaging job without publishing a release.
+
+Pushing a matching version tag runs the same job, generates build provenance, and
+publishes a GitHub prerelease with the installer and its SHA-256 checksum.
+
+The workflow uses only official GitHub actions pinned to immutable commit SHAs. Its
+temporary Actions artifact expires after one day; the installer attached to the
+GitHub Release remains the supported public download.
+
+## Local build command
 
 From the repository root, run:
 
@@ -22,11 +35,19 @@ The release version must match in:
 - `src-tauri/Cargo.lock`
 - `src-tauri/tauri.conf.json`
 
-The current beta version is `1.0.0-beta.5`, which produces:
+The internal version keeps SemVer prerelease syntax. The public installer converts
+the beta sequence into the final numeric component. For example,
+`1.0.0-beta.5` produces:
 
 ```text
-ScryPuppy_1.0.0-beta.5_x64-setup.exe
+ScryPuppy_beta_installer_v1.0.5.exe
 ```
+
+The next beta, `1.0.0-beta.6`, will therefore produce
+`ScryPuppy_beta_installer_v1.0.6.exe`. The package remains an NSIS `.exe`, not MSI.
+
+`scripts/release-metadata.ps1` is the single source of truth for this mapping. It
+also fails the build if any version manifest disagrees.
 
 ## What the script does
 
@@ -72,16 +93,17 @@ The current safeguards exist to prevent that class of failure:
 - The release executable is exercised before packaging.
 - The executable hash must remain stable during NSIS generation.
 
-## Public beta checklist
+## Public beta release checklist
 
 1. Confirm that all version files agree.
-2. Run `npm run build` and the relevant Rust checks.
-3. Review the main workspace, Context picker, Documents, Ask ScryPuppy, and Settings in English.
-4. Close every running ScryPuppy instance.
-5. Run `npm run build:windows`.
-6. Record the installer size and SHA-256 checksum.
-7. Commit and push the exact source used for the build.
-8. Create a version tag.
-9. Publish a GitHub prerelease with English notes and attach the NSIS installer.
+2. Merge the version bump into `main`.
+3. Create the exact tag reported by `scripts/release-metadata.ps1`.
+4. Push the tag and wait for **Windows build and release** to succeed.
+5. Verify the GitHub prerelease contains the `.exe`, `.sha256`, and provenance attestation.
+6. Review the main workspace, Context picker, Documents, Ask ScryPuppy, and Settings in English.
+
+For a non-publishing verification run, open a pull request that changes an application
+or release-pipeline file, or manually dispatch the workflow from the Actions page after
+the workflow exists on the default branch.
 
 Until the beta flag is removed, GitHub releases should remain marked as prereleases and describe privacy defaults, supported Windows versions, and known beta limitations.

@@ -18,6 +18,8 @@ Capture useful information, keep its source, organize it into Contexts, and turn
 
 > [!NOTE]
 > ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.5`.
+> Public beta installers use the shorter sequence format, currently
+> `ScryPuppy_beta_installer_v1.0.5.exe`.
 
 ![ScryPuppy main workspace](docs/screenshots/scrypuppy-main.png)
 
