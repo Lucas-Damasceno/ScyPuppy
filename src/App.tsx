@@ -8,6 +8,7 @@ import { MarkdownDocument } from "./components/MarkdownDocument";
 import { OnboardingTutorial } from "./components/OnboardingTutorial";
 import { BrandMark } from "./components/BrandMark";
 import { AiControls, ClipboardCaptureControls, QuickContextControls, SettingsSaveFeedback, StartupAndShortcutsControls } from "./components/SettingsControls";
+import { useAutoCloseTimer } from "./hooks/useAutoCloseTimer";
 import { useSettingsCoordinator } from "./hooks/useSettingsCoordinator";
 import { captureDisplayText, normalizeLanguage, translate, translateLegacyGeneratedContent, type AppLanguage } from "./i18n";
 import { LiteMagicPalette, LiteMainApp } from "./LiteApp";
@@ -311,8 +312,7 @@ function QuickContextPanel() {
   const [language, setLanguage] = useState<AppLanguage>("en");
   const [search, setSearch] = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  const [isPointerInside, setIsPointerInside] = useState(false);
-  const [hasFocusWithin, setHasFocusWithin] = useState(false);
+  const [autoCloseCycle, setAutoCloseCycle] = useState(0);
   const [activeOption, setActiveOption] = useState(0);
   const [savingContextId, setSavingContextId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -350,14 +350,22 @@ function QuickContextPanel() {
     return () => { document.documentElement.classList.remove("quick-context-window"); unlisteners.forEach((unlisten) => unlisten()); };
   }, [reloadChoices]);
 
-  useEffect(() => {
-    if (!capture || isPointerInside || hasFocusWithin || settings.quick_context_timeout_seconds === 0) return;
-    const id = capture.id;
-    const timeout = window.setTimeout(() => {
-      if (generation.current === id) api.closeQuickContext();
-    }, settings.quick_context_timeout_seconds * 1000);
-    return () => window.clearTimeout(timeout);
-  }, [capture, hasFocusWithin, isPointerInside, settings.quick_context_timeout_seconds]);
+  const captureId = capture?.id ?? null;
+  const registerInteraction = useCallback(() => {
+    setAutoCloseCycle((current) => current + 1);
+  }, []);
+  const closeAfterDelay = useCallback(() => {
+    if (captureId && generation.current === captureId) {
+      void api.closeQuickContext();
+    }
+  }, [captureId]);
+  useAutoCloseTimer({
+    enabled: Boolean(captureId),
+    delaySeconds: settings.quick_context_timeout_seconds,
+    paused: Boolean(savingContextId),
+    resetKey: autoCloseCycle,
+    onElapsed: closeAfterDelay,
+  });
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") api.closeQuickContext(); };
@@ -426,7 +434,7 @@ function QuickContextPanel() {
 
   return (
     <main className="quick-context-shell">
-      <section className="quick-context-panel" aria-label={tr("Quick context panel")} onPointerEnter={() => setIsPointerInside(true)} onPointerLeave={() => setIsPointerInside(false)} onFocusCapture={() => setHasFocusWithin(true)} onBlurCapture={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setHasFocusWithin(false); }}>
+      <section className="quick-context-panel" aria-label={tr("Quick context panel")} onPointerDownCapture={registerInteraction} onKeyDownCapture={registerInteraction} onFocusCapture={registerInteraction}>
         <header>
           <div className="quick-context-brand"><BrandMark /></div>
           <div className="quick-context-title"><span><Icon name="check" size={11} />{tr("Capture saved")}</span><strong>{capture.source_app_name ?? tr("Unknown application")}</strong></div>
