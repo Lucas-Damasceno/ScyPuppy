@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/windows-release.yml"
+      - ".github/workflows/automatic-beta-release.yml"
       - ".github/dependabot.yml"
       - "package.json"
       - "package-lock.json"
@@ -14,10 +15,31 @@ on:
     tags:
       - "v*.*.0-beta.*"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      automatic_release:
+        description: Build and publish the next beta after an eligible PR merge.
+        required: false
+        default: false
+        type: boolean
+      pull_request_number:
+        description: Pull request that owns the automatic beta release.
+        required: false
+        default: 0
+        type: number
+      source_ref:
+        description: Exact merged commit to build.
+        required: false
+        default: ""
+        type: string
 
 concurrency:
-  group: windows-release-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: >-
+    ${{ inputs.automatic_release &&
+        'windows-automatic-beta-release' ||
+        format('windows-release-{0}', github.ref) }}
+  cancel-in-progress: >-
+    ${{ !inputs.automatic_release && github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -33,10 +55,16 @@ jobs:
       checksum_name: ${{ steps.metadata.outputs.checksum_name }}
       public_version: ${{ steps.metadata.outputs.public_version }}
       release_tag: ${{ steps.metadata.outputs.release_tag }}
+      manifest_version: ${{ steps.metadata.outputs.manifest_version }}
+      automatic_release: ${{ steps.metadata.outputs.automatic_release }}
+      existing_release_tag: ${{ steps.metadata.outputs.existing_release_tag }}
 
     steps:
       - name: Check out source
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
+          fetch-depth: ${{ inputs.automatic_release && '0' || '1' }}
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -58,11 +86,26 @@ jobs:
             ~/.cargo/git
             src-tauri/target
           key: windows-rust-${{ hashFiles('src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-rust-
 
       - name: Resolve and validate release metadata
         id: metadata
         shell: pwsh
-        run: ./scripts/release-metadata.ps1 -GitHubOutput
+        env:
+          AUTOMATIC_RELEASE: ${{ inputs.automatic_release }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+        run: |
+          if ($env:AUTOMATIC_RELEASE -eq "true") {
+            ./scripts/prepare-beta-release.ps1 `
+              -PullRequestNumber ([int]$env:PULL_REQUEST_NUMBER) `
+              -GitHubOutput
+          } else {
+            ./scripts/release-metadata.ps1 -GitHubOutput
+            "automatic_release=false" >> $env:GITHUB_OUTPUT
+            "existing_release_tag=false" >> $env:GITHUB_OUTPUT
+            "pull_request_number=0" >> $env:GITHUB_OUTPUT
+          }
 
       - name: Test portable SHA-256 helper
         shell: pwsh
@@ -131,7 +174,9 @@ jobs:
 
   publish:
     name: Attest and publish GitHub prerelease
-    if: startsWith(github.ref, 'refs/tags/')
+    if: >-
+      startsWith(github.ref, 'refs/tags/') ||
+      needs.build.outputs.automatic_release == 'true'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -141,6 +186,54 @@ jobs:
       attestations: write
 
     steps:
+      - name: Check out automatic release source
+        if: needs.build.outputs.automatic_release == 'true'
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+
+      - name: Create or reuse automatic release tag
+        if: needs.build.outputs.automatic_release == 'true'
+        shell: pwsh
+        env:
+          EXISTING_RELEASE_TAG: ${{ needs.build.outputs.existing_release_tag }}
+          MANIFEST_VERSION: ${{ needs.build.outputs.manifest_version }}
+          PULL_REQUEST_NUMBER: ${{ inputs.pull_request_number }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if ($env:EXISTING_RELEASE_TAG -eq "true") {
+            git checkout --detach $env:RELEASE_TAG
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not check out existing tag '$env:RELEASE_TAG'."
+            }
+          } else {
+            ./scripts/set-release-version.ps1 -Version $env:MANIFEST_VERSION
+            git add -- `
+              package.json `
+              package-lock.json `
+              src-tauri/Cargo.toml `
+              src-tauri/Cargo.lock `
+              src-tauri/tauri.conf.json `
+              README.md
+            git commit -m "chore(release): $env:RELEASE_TAG [skip ci]"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not create the automatic version commit."
+            }
+            git tag -a $env:RELEASE_TAG -m "ScryPuppy-PR:$env:PULL_REQUEST_NUMBER"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not create automatic release tag '$env:RELEASE_TAG'."
+            }
+            git push origin $env:RELEASE_TAG
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not push automatic release tag '$env:RELEASE_TAG'."
+            }
+          }
+
       - name: Download validated installer
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -162,11 +255,102 @@ jobs:
           RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
         run: |
           set -euo pipefail
-          gh release create "$RELEASE_TAG" \
-            "release/$INSTALLER_NAME" \
-            "release/$CHECKSUM_NAME" \
-            --repo "$GITHUB_REPOSITORY" \
-            --verify-tag \
-            --prerelease \
-            --title "ScryPuppy Beta v$PUBLIC_VERSION" \
-            --generate-notes
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" \
+              "release/$INSTALLER_NAME" \
+              "release/$CHECKSUM_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "ScryPuppy Beta v$PUBLIC_VERSION"
+          else
+            gh release create "$RELEASE_TAG" \
+              "release/$INSTALLER_NAME" \
+              "release/$CHECKSUM_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --prerelease \
+              --title "ScryPuppy Beta v$PUBLIC_VERSION" \
+              --generate-notes
+          fi
+
+      - name: Synchronize released version to main
+        if: needs.build.outputs.automatic_release == 'true'
+        shell: pwsh
+        env:
+          MANIFEST_VERSION: ${{ needs.build.outputs.manifest_version }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $targetMatch = [regex]::Match(
+            $env:MANIFEST_VERSION,
+            '^(?<major>\d+)\.(?<minor>\d+)\.0-beta\.(?<beta>\d+)$'
+          )
+          if (-not $targetMatch.Success) {
+            throw "Unsupported automatic release version '$env:MANIFEST_VERSION'."
+          }
+
+          for ($attempt = 1; $attempt -le 5; $attempt++) {
+            git fetch origin main
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not fetch main while synchronizing the release version."
+            }
+            git switch --force-create automatic-version-sync origin/main
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not create the automatic version synchronization branch."
+            }
+
+            $current = ./scripts/release-metadata.ps1 | ConvertFrom-Json
+            $currentMatch = [regex]::Match(
+              $current.manifest_version,
+              '^(?<major>\d+)\.(?<minor>\d+)\.0-beta\.(?<beta>\d+)$'
+            )
+            if (-not $currentMatch.Success) {
+              throw "Main contains an unsupported version '$($current.manifest_version)'."
+            }
+            if (
+              $currentMatch.Groups["major"].Value -ne $targetMatch.Groups["major"].Value -or
+              $currentMatch.Groups["minor"].Value -ne $targetMatch.Groups["minor"].Value
+            ) {
+              throw "Main and the automatic release use different version lines."
+            }
+
+            $currentBeta = [int]$currentMatch.Groups["beta"].Value
+            $targetBeta = [int]$targetMatch.Groups["beta"].Value
+            if ($currentBeta -gt $targetBeta) {
+              Write-Host "Main already contains newer beta $currentBeta; no version sync is needed."
+              exit 0
+            }
+
+            ./scripts/set-release-version.ps1 -Version $env:MANIFEST_VERSION
+            git add -- `
+              package.json `
+              package-lock.json `
+              src-tauri/Cargo.toml `
+              src-tauri/Cargo.lock `
+              src-tauri/tauri.conf.json `
+              README.md
+            git diff --cached --quiet
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Main already contains $env:MANIFEST_VERSION and matching README text."
+              exit 0
+            }
+            git commit -m "chore(release): sync $env:RELEASE_TAG [skip ci]"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Could not commit the synchronized release version."
+            }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -eq 0) {
+              Write-Host "Main synchronized to $env:MANIFEST_VERSION."
+              exit 0
+            }
+
+            if ($attempt -lt 5) {
+              Write-Warning "Main advanced during version sync; retrying ($attempt/5)."
+              Start-Sleep -Seconds (2 * $attempt)
+            }
+          }
+
+          throw "Could not synchronize $env:MANIFEST_VERSION to main after five attempts."

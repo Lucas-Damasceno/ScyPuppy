@@ -8,8 +8,14 @@ Public builds are produced by `.github/workflows/windows-release.yml` on a stand
 GitHub-hosted Windows runner. Pull requests that affect the application or release
 pipeline run the complete validation and packaging job without publishing a release.
 
-Pushing a matching version tag runs the same job, generates build provenance, and
-publishes a GitHub prerelease with the installer and its SHA-256 checksum.
+Merging a pull request whose source branch starts with `feat/` or `fix/` queues an
+automatic beta release. The workflow increments the beta number, runs the same
+validation and packaging job, creates the version tag, publishes the prerelease,
+and synchronizes the released version back to `main`.
+
+Pushing a matching version tag manually remains supported. It runs the same job,
+generates build provenance, and publishes a GitHub prerelease with the installer
+and its SHA-256 checksum.
 
 The workflow uses only official GitHub actions pinned to immutable commit SHAs. Its
 temporary Actions artifact expires after one day; the installer attached to the
@@ -43,7 +49,7 @@ the beta sequence into the final numeric component. For example,
 ScryPuppy_beta_installer_v1.0.5.exe
 ```
 
-The next beta, `1.0.0-beta.6`, will therefore produce
+For example, `1.0.0-beta.6` produces
 `ScryPuppy_beta_installer_v1.0.6.exe`. The package remains an NSIS `.exe`, not MSI.
 
 `scripts/release-metadata.ps1` is the single source of truth for this mapping. It
@@ -93,14 +99,24 @@ The current safeguards exist to prevent that class of failure:
 - The release executable is exercised before packaging.
 - The executable hash must remain stable during NSIS generation.
 
-## Public beta release checklist
+## Automatic public beta release
 
-1. Confirm that all version files agree.
-2. Merge the version bump into `main`.
-3. Create the exact tag reported by `scripts/release-metadata.ps1`.
-4. Push the tag and wait for **Windows build and release** to succeed.
-5. Verify the GitHub prerelease contains the `.exe`, `.sha256`, and provenance attestation.
-6. Review the main workspace, Context picker, Documents, Ask ScryPuppy, and Settings in English.
+1. Create the pull request from a branch named `feat/<description>` or
+   `fix/<description>`.
+2. Review and merge the pull request into `main`.
+3. **Automatic beta release** serializes the request with any other pending release.
+4. **Windows build and release** calculates the next unused beta number and updates
+   every package manifest plus the current version shown in the README.
+5. The workflow tests and packages the exact merged commit, creates an annotated
+   tag associated with the pull request, publishes the `.exe`, `.sha256`, and
+   provenance attestation, then synchronizes the released version to `main`.
+
+Closed pull requests that were not merged, branches without the supported prefix,
+and the workflow's own version-sync commit do not create releases. Re-running a
+release for the same pull request reuses its annotated tag instead of consuming a
+new beta number.
+
+Manual version tags remain available as a recovery and maintenance path.
 
 For a non-publishing verification run, open a pull request that changes an application
 or release-pipeline file, or manually dispatch the workflow from the Actions page after

@@ -1,0 +1,31 @@
+name: Automatic beta release
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - closed
+
+concurrency:
+  group: automatic-beta-release
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  release:
+    if: >-
+      github.event.pull_request.merged == true &&
+      (
+        startsWith(github.event.pull_request.head.ref, 'feat/') ||
+        startsWith(github.event.pull_request.head.ref, 'fix/')
+      )
+    uses: ./.github/workflows/windows-release.yml
+    with:
+      automatic_release: true
+      pull_request_number: ${{ github.event.pull_request.number }}
+      source_ref: ${{ github.event.pull_request.merge_commit_sha }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
