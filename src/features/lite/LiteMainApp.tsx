@@ -18,6 +18,8 @@ import { LiteDocumentsWorkspace } from "./LiteDocumentsWorkspace";
 import { LiteIcon } from "./LiteIcon";
 import type { LiteIconName } from "./LiteIcon";
 import { LiteSettingsDialog } from "./LiteSettingsDialog";
+import { AppUpdateNotice } from "../updates/AppUpdateNotice";
+import { useAppUpdater } from "../updates/useAppUpdater";
 
 const capturePageSize = 50;
 
@@ -50,12 +52,15 @@ export function LiteMainApp() {
   const [newContextName, setNewContextName] = useState("");
   const [isNewContextOpen, setIsNewContextOpen] = useState(false);
   const [isCreatingContext, setIsCreatingContext] = useState(false);
-  const [isSettingsOpen, setIsSettingsOpen] = useState(docsPreview === "settings");
+  const [isSettingsOpen, setIsSettingsOpen] = useState(
+    docsPreview === "settings" || docsPreview === "update-settings",
+  );
   const [isOnboardingOpen, setIsOnboardingOpen] = useState(
     import.meta.env.DEV && new URLSearchParams(window.location.search).has("onboarding"),
   );
   const [status, setStatus] = useState<string | null>(null);
   const [aiOptions, setAiOptions] = useState<AiProviderOption[]>([]);
+  const updater = useAppUpdater();
   const searchInputRef = useRef<HTMLInputElement>(null);
   const captureListRef = useRef<HTMLDivElement>(null);
   const {
@@ -406,6 +411,7 @@ export function LiteMainApp() {
         settings={settings}
         aiOptions={aiOptions}
         language={language}
+        updater={updater}
         saveState={saveState}
         saveError={saveError}
         onPatch={patchSettings}
@@ -416,6 +422,7 @@ export function LiteMainApp() {
         onOpenTutorial={() => { setIsSettingsOpen(false); setIsOnboardingOpen(true); }}
         onStatus={setStatus}
       />}
+      {!isSettingsOpen && <AppUpdateNotice updater={updater} language={language} />}
     </main>
   );
 }

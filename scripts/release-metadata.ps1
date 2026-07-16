@@ -66,6 +66,8 @@ $bundleRoot = Join-Path $tauriRoot "target\release\bundle\nsis"
 $installerPath = Join-Path $bundleRoot $installerName
 $checksumName = "$installerName.sha256"
 $checksumPath = Join-Path $bundleRoot $checksumName
+$signatureName = "$installerName.sig"
+$signaturePath = Join-Path $bundleRoot $signatureName
 $artifactName = "scrypuppy-windows-v$publicVersion"
 $releaseTag = "v$manifestVersion"
 
@@ -76,6 +78,8 @@ $metadata = [ordered]@{
   installer_path = $installerPath
   checksum_name = $checksumName
   checksum_path = $checksumPath
+  signature_name = $signatureName
+  signature_path = $signaturePath
   artifact_name = $artifactName
   release_tag = $releaseTag
 }

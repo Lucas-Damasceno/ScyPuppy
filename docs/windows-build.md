@@ -14,8 +14,8 @@ validation and packaging job, creates the version tag, publishes the prerelease,
 and synchronizes the released version back to `main`.
 
 Pushing a matching version tag manually remains supported. It runs the same job,
-generates build provenance, and publishes a GitHub prerelease with the installer
-and its SHA-256 checksum.
+generates build provenance, and publishes a GitHub prerelease with the installer,
+its SHA-256 checksum, and its Tauri updater signature.
 
 The workflow uses only official GitHub actions pinned to immutable commit SHAs. Its
 temporary Actions artifact expires after one day; the installer attached to the
@@ -69,11 +69,48 @@ also fails the build if any version manifest disagrees.
 8. Packages the multilingual NSIS installer.
 9. Verifies that packaging did not mutate the release binary.
 10. Moves the final installer to the supported bundle directory.
+11. Signs that final installer when an updater signing key is available.
 
 Output is written to:
 
 ```text
 src-tauri/target/release/bundle/nsis/
+```
+
+## Signed in-app updates
+
+Installed beta versions check the fixed updater channel:
+
+```text
+https://github.com/Lucas-Damasceno/ScryPuppy/releases/download/updater-beta/latest.json
+```
+
+The automatic release workflow publishes each installer and `.sig` file to its
+versioned prerelease. It then updates `latest.json` in the `updater-beta` release
+with the version, release notes, installer URL, publication date, and signature.
+The private signing key is never stored in the repository or in an Actions
+artifact.
+
+Repository Actions secrets required for publishing are:
+
+- `TAURI_SIGNING_PRIVATE_KEY`
+- `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
+
+The matching public key is embedded in `src-tauri/tauri.conf.json`. Losing or
+rotating the private key prevents already-installed versions from trusting future
+updates, so the key and password must be backed up securely outside the repository.
+
+Pull-request validation builds intentionally receive neither secret. They still
+build and smoke-test the installer, but skip distributable updater artifacts.
+Release and automatic post-merge builds fail early if the signing key is absent.
+
+For a signed local build, load the private key contents and password into the
+environment before running the supported build command:
+
+```powershell
+$env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$HOME\.tauri\ScryPuppy-updater.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = Get-Content -Raw "$HOME\.tauri\ScryPuppy-updater.key.password"
+npm run build:windows
 ```
 
 ## Why `custom-protocol` is mandatory

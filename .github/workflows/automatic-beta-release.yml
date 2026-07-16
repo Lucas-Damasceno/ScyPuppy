@@ -25,6 +25,7 @@ jobs:
       automatic_release: true
       pull_request_number: ${{ github.event.pull_request.number }}
       source_ref: ${{ github.event.pull_request.merge_commit_sha }}
+    secrets: inherit
     permissions:
       contents: write
       id-token: write

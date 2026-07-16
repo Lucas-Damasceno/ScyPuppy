@@ -10,12 +10,15 @@ import {
 import type { SettingsSaveState } from "../../hooks/useSettingsCoordinator";
 import { normalizeLanguage, translate, type AppLanguage } from "../../i18n";
 import type { AiProviderOption, Settings } from "../../types";
+import { AppUpdateSettings } from "../updates/AppUpdateNotice";
+import type { AppUpdaterController } from "../updates/useAppUpdater";
 import { LiteIcon } from "./LiteIcon";
 
 type LiteSettingsDialogProps = {
   settings: Settings;
   aiOptions: AiProviderOption[];
   language: AppLanguage;
+  updater: AppUpdaterController;
   saveState: SettingsSaveState;
   saveError: unknown;
   onPatch: (patch: Partial<Settings>) => Promise<void>;
@@ -27,7 +30,7 @@ type LiteSettingsDialogProps = {
   onStatus: (message: string | null) => void;
 };
 
-export function LiteSettingsDialog({ settings, aiOptions, language, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
+export function LiteSettingsDialog({ settings, aiOptions, language, updater, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
   const tr = (english: string, variables?: MessageParams) => translate(language, english, variables);
   return (
     <div className="modal-backdrop lite-modal-backdrop lite-settings-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
@@ -50,6 +53,7 @@ export function LiteSettingsDialog({ settings, aiOptions, language, saveState, s
               <LiteIcon name="arrow" />
             </button>
           </section>
+          <AppUpdateSettings updater={updater} language={language} />
           <section className="settings-group ai-settings-group">
             <div className="settings-group-title"><LiteIcon name="sparkles" /><div><strong>{tr("Artificial intelligence")}</strong><span>{tr("Optional provider for better direct answers")}</span></div></div>
             <AiControls settings={settings} options={aiOptions} tr={tr} onPatch={onPatch} onSaveCredential={(value) => onPatch({ ai_api_key: value })} onClearCredential={onClearCredential} />

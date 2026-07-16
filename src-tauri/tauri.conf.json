@@ -81,6 +81,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "windows": {
       "nsis": {
@@ -103,5 +104,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyOTQ4N0I0QTg0NTdFM0MKUldROGZrV290SWVVWWpGS0ExYkQ1bCtjNEd5aVhQUm5Zb1JOZjBsTDB3WllkMjI4TjFOMVFaQ1YK",
+      "endpoints": [
+        "https://github.com/Lucas-Damasceno/ScryPuppy/releases/download/updater-beta/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

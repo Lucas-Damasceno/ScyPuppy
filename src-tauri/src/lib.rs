@@ -7343,6 +7343,8 @@ fn io_other(error: impl ToString) -> std::io::Error {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             restore_main_window(app);
             process_import_args(app.clone(), args);
@@ -7428,7 +7430,6 @@ pub fn run() {
             {
                 app.handle().plugin(
                     tauri_plugin_global_shortcut::Builder::new()
-                        .with_shortcuts([HOTKEY, REFERENCE_HOTKEY, PASTE_HOTKEY, MAGIC_HOTKEY])?
                         .with_handler(|app, shortcut, event| {
                             if event.state == ShortcutState::Released {
                                 let is_magic = shortcut
@@ -7486,9 +7487,11 @@ pub fn run() {
                         })
                         .build(),
                 )?;
-                let _ = app.global_shortcut().is_registered(HOTKEY);
-                let _ = app.global_shortcut().is_registered(PASTE_HOTKEY);
-                let _ = app.global_shortcut().is_registered(MAGIC_HOTKEY);
+                for shortcut in [HOTKEY, REFERENCE_HOTKEY, PASTE_HOTKEY, MAGIC_HOTKEY] {
+                    if let Err(error) = app.global_shortcut().register(shortcut) {
+                        eprintln!("Nao foi possivel registrar o atalho global {shortcut}: {error}");
+                    }
+                }
             }
 
             Ok(())
