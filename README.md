@@ -17,9 +17,9 @@ Capture useful information, keep its source, organize it into Contexts, and turn
 </div>
 
 > [!NOTE]
-> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.8`.
+> ScryPuppy 1.0 is in beta. The current package version is `1.0.0-beta.9`.
 > Public beta installers use the shorter sequence format, currently
-> `ScryPuppy_beta_installer_v1.0.8.exe`.
+> `ScryPuppy_beta_installer_v1.0.9.exe`.
 
 ![ScryPuppy main workspace](docs/screenshots/scrypuppy-main.png)
 
