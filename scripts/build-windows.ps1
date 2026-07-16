@@ -8,6 +8,7 @@ $nsisScript = Join-Path $nsisScriptRoot "installer.nsi"
 $cleanBinary = Join-Path $targetRoot "scrypuppy.exe"
 $makensis = Join-Path $env:LOCALAPPDATA "tauri\NSIS\makensis.exe"
 $metadata = (& (Join-Path $PSScriptRoot "release-metadata.ps1")) | ConvertFrom-Json
+$hashScript = Join-Path $PSScriptRoot "file-sha256.ps1"
 $installerName = $metadata.installer_name
 $bundleRoot = Join-Path $targetRoot "bundle\nsis"
 $installer = Join-Path $bundleRoot $installerName
@@ -51,7 +52,7 @@ try {
     }
   }
 
-  $binaryHashBefore = (Get-FileHash $cleanBinary -Algorithm SHA256).Hash
+  $binaryHashBefore = & $hashScript -Path $cleanBinary
   Push-Location $nsisScriptRoot
   try {
     & $makensis -INPUTCHARSET UTF8 -OUTPUTCHARSET UTF8 -V3 $nsisScript
@@ -60,7 +61,7 @@ try {
     Pop-Location
   }
 
-  $binaryHashAfter = (Get-FileHash $cleanBinary -Algorithm SHA256).Hash
+  $binaryHashAfter = & $hashScript -Path $cleanBinary
   if ($binaryHashBefore -ne $binaryHashAfter) {
     throw "The Windows executable changed while the installer was being packaged."
   }
