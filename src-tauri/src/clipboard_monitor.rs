@@ -219,7 +219,9 @@ fn monitor_loop(
                 let sequence = GetClipboardSequenceNumber();
                 if sequence != 0 && sequence != last_sequence {
                     last_sequence = sequence;
-                    if !state.consume_ignored_clipboard_sequence(sequence) {
+                    if !state.consume_ignored_clipboard_sequence(sequence)
+                        && !state.clipboard_monitor_is_suppressed()
+                    {
                         let active_window = collect_active_window();
                         if let Ok(Some(payload)) = read_clipboard_payload(&state) {
                             if payload

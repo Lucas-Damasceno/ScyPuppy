@@ -8,7 +8,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, LazyLock, Mutex,
+    },
     thread,
     time::Duration,
 };
@@ -92,6 +95,7 @@ struct AppState {
     context_key: String,
     capture_gate: Arc<Mutex<CaptureGate>>,
     ignored_clipboard_sequences: Arc<Mutex<SequenceSuppression>>,
+    clipboard_monitor_suppressions: Arc<AtomicUsize>,
     clipboard: Arc<ClipboardService>,
     clipboard_monitor: Arc<ClipboardMonitorHandle>,
     ocr_worker_running: Arc<Mutex<bool>>,
@@ -139,6 +143,32 @@ impl AppState {
             .lock()
             .map(|mut values| values.consume(sequence))
             .unwrap_or(false)
+    }
+
+    fn suppress_clipboard_monitor(&self) -> ClipboardMonitorSuppression {
+        ClipboardMonitorSuppression::acquire(self.clipboard_monitor_suppressions.clone())
+    }
+
+    fn clipboard_monitor_is_suppressed(&self) -> bool {
+        self.clipboard_monitor_suppressions.load(Ordering::Acquire) > 0
+    }
+}
+
+struct ClipboardMonitorSuppression {
+    count: Arc<AtomicUsize>,
+}
+
+impl ClipboardMonitorSuppression {
+    fn acquire(count: Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::AcqRel);
+        Self { count }
+    }
+}
+
+impl Drop for ClipboardMonitorSuppression {
+    fn drop(&mut self) {
+        let previous = self.count.fetch_sub(1, Ordering::AcqRel);
+        debug_assert!(previous > 0, "clipboard monitor suppression underflow");
     }
 }
 
@@ -1983,6 +2013,10 @@ fn run_capture_core(
 ) -> Result<CaptureDto, String> {
     let active_window = collect_active_window();
     let previous_clipboard = read_clipboard_payload(&state).ok().flatten();
+    // The clipboard listener can receive the simulated copy before its sequence
+    // is recorded below. Keep it paused across the marker and native copy so one
+    // shortcut cannot be persisted once by the monitor and once by this path.
+    let monitor_suppression = state.suppress_clipboard_monitor();
     let clipboard_marker = format!("__CLIPSCRY_COPY_MARKER_{}__", Uuid::new_v4());
     write_clipboard_text(&state, &clipboard_marker)
         .map_err(|error| format!("Nao foi possivel preparar o clipboard: {error}"))?;
@@ -2003,6 +2037,7 @@ fn run_capture_core(
         }
     };
     mark_current_clipboard_sequence(&state);
+    drop(monitor_suppression);
 
     if capture_kind == "reference"
         && matches!(
@@ -7303,6 +7338,7 @@ pub fn run() {
                 context_key,
                 capture_gate: Arc::new(Mutex::new(CaptureGate { in_progress: false })),
                 ignored_clipboard_sequences: Arc::new(Mutex::new(SequenceSuppression::default())),
+                clipboard_monitor_suppressions: Arc::new(AtomicUsize::new(0)),
                 clipboard,
                 clipboard_monitor: monitor_handle.clone(),
                 ocr_worker_running: Arc::new(Mutex::new(false)),
@@ -7671,6 +7707,22 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_monitor_suppression_is_scoped_and_nestable() {
+        let count = Arc::new(AtomicUsize::new(0));
+        let first = ClipboardMonitorSuppression::acquire(count.clone());
+        assert_eq!(count.load(Ordering::Acquire), 1);
+
+        {
+            let _second = ClipboardMonitorSuppression::acquire(count.clone());
+            assert_eq!(count.load(Ordering::Acquire), 2);
+        }
+
+        assert_eq!(count.load(Ordering::Acquire), 1);
+        drop(first);
+        assert_eq!(count.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
     fn internal_marker_is_rejected_defensively() {
         assert!(is_internal_clipboard_marker("__CLIPSCRY_COPY_MARKER_abc__"));
         assert!(!is_internal_clipboard_marker("ordinary copied text"));
@@ -7978,6 +8030,7 @@ mod tests {
             context_key: String::new(),
             capture_gate: Arc::new(Mutex::new(CaptureGate { in_progress: false })),
             ignored_clipboard_sequences: Arc::new(Mutex::new(SequenceSuppression::default())),
+            clipboard_monitor_suppressions: Arc::new(AtomicUsize::new(0)),
             clipboard: Arc::new(ClipboardService::start().expect("test clipboard service")),
             clipboard_monitor: ClipboardMonitorHandle::new(),
             ocr_worker_running: Arc::new(Mutex::new(false)),
