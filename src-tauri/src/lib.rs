@@ -25,7 +25,7 @@ use enigo::{
 };
 use image::{ImageBuffer, Rgba};
 use keyring::{Entry as CredentialEntry, Error as CredentialError};
-use regex::Regex;
+use regex::{Regex, RegexBuilder};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -567,6 +567,62 @@ struct ApplyContextSuggestionsResult {
     associations_added: usize,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SmartContextConditionDto {
+    id: Option<String>,
+    field: String,
+    operator: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct SmartContextRuleDto {
+    id: Option<String>,
+    context_id: String,
+    name: String,
+    enabled: bool,
+    match_mode: String,
+    conditions: Vec<SmartContextConditionDto>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct SmartContextRulePreview {
+    match_count: usize,
+    samples: Vec<CaptureDto>,
+}
+
+#[derive(Debug, Serialize)]
+struct SaveSmartContextRuleResult {
+    rule: SmartContextRuleDto,
+    associations_added: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct DataCleanupFilter {
+    content_types: Vec<String>,
+    context_id: Option<String>,
+    period_minutes: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct DataCleanupPreview {
+    selection_token: String,
+    capture_count: usize,
+    image_count: usize,
+    file_count: usize,
+    reclaimable_bytes: u64,
+    oldest_captured_at: Option<String>,
+    newest_captured_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct DataCleanupResult {
+    deleted_count: usize,
+    reclaimed_bytes: u64,
+}
+
 #[derive(Debug, Serialize)]
 struct LibraryCounts {
     all: i64,
@@ -963,6 +1019,267 @@ fn delete_all_data(app: AppHandle, state: State<AppState>) -> CommandResult<()> 
     Ok(())
 }
 
+fn validate_cleanup_filter(filter: &DataCleanupFilter) -> CommandResult<()> {
+    let allowed = ["text", "image", "link", "file", "folder", "application"];
+    if filter
+        .content_types
+        .iter()
+        .any(|value| !allowed.contains(&value.as_str()))
+        || filter
+            .period_minutes
+            .is_some_and(|minutes| !(1..=5_256_000).contains(&minutes))
+    {
+        return Err(AppError::new("cleanup.invalid_filter"));
+    }
+    Ok(())
+}
+
+fn cleanup_candidate_ids(
+    conn: &Connection,
+    filter: &DataCleanupFilter,
+) -> Result<Vec<(String, String)>, String> {
+    let mut clauses = Vec::new();
+    let mut args = Vec::new();
+    if let Some(minutes) = filter.period_minutes {
+        clauses.push("c.captured_at >= ?".to_string());
+        args.push((Utc::now() - chrono::TimeDelta::minutes(minutes)).to_rfc3339());
+    }
+    if let Some(context_id) = filter
+        .context_id
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        if context_id == INBOX_CONTEXT_ID {
+            clauses.push("c.capture_kind <> 'reference' AND NOT EXISTS (SELECT 1 FROM capture_contexts inbox_cc WHERE inbox_cc.capture_id = c.id)".to_string());
+        } else if context_id == CONTENT_BASE_CONTEXT_ID {
+            clauses.push("c.capture_kind = 'reference'".to_string());
+        } else {
+            clauses.push("EXISTS (SELECT 1 FROM capture_contexts context_cc WHERE context_cc.capture_id = c.id AND context_cc.context_id = ?)".to_string());
+            args.push(context_id.clone());
+        }
+    }
+
+    let selected_types = filter
+        .content_types
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if !selected_types.is_empty() {
+        let mut type_clauses = Vec::new();
+        if selected_types.contains("application") {
+            type_clauses.push("EXISTS (SELECT 1 FROM capture_file_entries cleanup_app WHERE cleanup_app.capture_id = c.id AND cleanup_app.entry_kind = 'application')");
+        }
+        if selected_types.contains("folder") {
+            type_clauses.push("EXISTS (SELECT 1 FROM capture_file_entries cleanup_folder WHERE cleanup_folder.capture_id = c.id AND cleanup_folder.entry_kind = 'directory')");
+        }
+        if selected_types.contains("file") {
+            type_clauses.push("EXISTS (SELECT 1 FROM capture_file_entries cleanup_file WHERE cleanup_file.capture_id = c.id AND cleanup_file.entry_kind IN ('file', 'shortcut', 'virtual_file'))");
+        }
+        if selected_types.contains("image") {
+            type_clauses.push("EXISTS (SELECT 1 FROM capture_representations cleanup_image WHERE cleanup_image.capture_id = c.id AND cleanup_image.kind = 'image') AND NOT EXISTS (SELECT 1 FROM capture_representations cleanup_image_files WHERE cleanup_image_files.capture_id = c.id AND cleanup_image_files.kind = 'files')");
+        }
+        if selected_types.contains("link") {
+            type_clauses.push("EXISTS (SELECT 1 FROM capture_representations cleanup_link WHERE cleanup_link.capture_id = c.id AND cleanup_link.kind = 'url') AND NOT EXISTS (SELECT 1 FROM capture_representations cleanup_link_richer WHERE cleanup_link_richer.capture_id = c.id AND cleanup_link_richer.kind IN ('files', 'image'))");
+        }
+        if selected_types.contains("text") {
+            type_clauses.push("NOT EXISTS (SELECT 1 FROM capture_representations cleanup_text_richer WHERE cleanup_text_richer.capture_id = c.id AND cleanup_text_richer.kind IN ('files', 'image', 'url'))");
+        }
+        clauses.push(format!("({})", type_clauses.join(" OR ")));
+    }
+
+    let where_clause = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+    let sql = format!(
+        "SELECT c.id, c.captured_at FROM captures c{where_clause} ORDER BY c.captured_at DESC, c.id"
+    );
+    let arg_refs = args
+        .iter()
+        .map(|value| value as &dyn rusqlite::ToSql)
+        .collect::<Vec<_>>();
+    let mut stmt = conn.prepare(&sql).map_err(err)?;
+    let candidates = stmt
+        .query_map(&arg_refs[..], |row| Ok((row.get(0)?, row.get(1)?)))
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    Ok(candidates)
+}
+
+fn path_size(path: &Path) -> u64 {
+    if path.is_file() {
+        return fs::metadata(path)
+            .map(|metadata| metadata.len())
+            .unwrap_or(0);
+    }
+    let Ok(entries) = fs::read_dir(path) else {
+        return 0;
+    };
+    entries.flatten().fold(0, |total, entry| {
+        let path = entry.path();
+        total.saturating_add(if path.is_dir() {
+            path_size(&path)
+        } else {
+            entry.metadata().map(|metadata| metadata.len()).unwrap_or(0)
+        })
+    })
+}
+
+fn cleanup_reclaimable_bytes(
+    conn: &Connection,
+    state: &AppState,
+    capture_ids: &[String],
+) -> Result<u64, String> {
+    let mut paths = HashSet::new();
+    for capture_id in capture_ids {
+        let capture_files_dir = state.clipboard_files_dir().join(capture_id);
+        if capture_files_dir.exists() {
+            paths.insert(capture_files_dir.clone());
+        }
+        for asset in assets_for_capture(conn, capture_id)? {
+            let Some(path) = asset.path.map(PathBuf::from) else {
+                continue;
+            };
+            if !path.starts_with(&capture_files_dir) {
+                paths.insert(path);
+            }
+        }
+    }
+    Ok(paths
+        .into_iter()
+        .fold(0_u64, |total, path| total.saturating_add(path_size(&path))))
+}
+
+fn data_cleanup_preview_from_conn(
+    conn: &Connection,
+    state: &AppState,
+    filter: &DataCleanupFilter,
+) -> Result<DataCleanupPreview, String> {
+    let candidates = cleanup_candidate_ids(conn, filter)?;
+    let ids = candidates
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    let selection_token = sha256_hex(ids.join("\n").as_bytes());
+    let mut image_count = 0;
+    let mut file_count = 0;
+    for id in &ids {
+        let (has_image, has_files): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                   EXISTS (SELECT 1 FROM capture_representations WHERE capture_id = ?1 AND kind = 'image'),
+                   EXISTS (SELECT 1 FROM capture_representations WHERE capture_id = ?1 AND kind = 'files')",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(err)?;
+        image_count += usize::from(has_image != 0 && has_files == 0);
+        file_count += usize::from(has_files != 0);
+    }
+    Ok(DataCleanupPreview {
+        selection_token,
+        capture_count: ids.len(),
+        image_count,
+        file_count,
+        reclaimable_bytes: cleanup_reclaimable_bytes(conn, state, &ids)?,
+        oldest_captured_at: candidates.last().map(|(_, date)| date.clone()),
+        newest_captured_at: candidates.first().map(|(_, date)| date.clone()),
+    })
+}
+
+#[tauri::command]
+async fn preview_data_cleanup(
+    state: State<'_, AppState>,
+    filter: DataCleanupFilter,
+) -> CommandResult<DataCleanupPreview> {
+    validate_cleanup_filter(&filter)?;
+    let state = state.inner().clone();
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = open_conn(&state)?;
+            if let Some(context_id) = filter
+                .context_id
+                .as_deref()
+                .filter(|id| !matches!(*id, INBOX_CONTEXT_ID | CONTENT_BASE_CONTEXT_ID))
+            {
+                validate_user_context_exists(&conn, context_id).map_err(|error| error.code)?;
+            }
+            data_cleanup_preview_from_conn(&conn, &state, &filter)
+        })
+        .await
+        .map_err(err)?,
+    )
+}
+
+#[tauri::command]
+async fn delete_data_by_filter(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    filter: DataCleanupFilter,
+    selection_token: String,
+) -> CommandResult<DataCleanupResult> {
+    validate_cleanup_filter(&filter)?;
+    let state = state.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> CommandResult<_> {
+        let mut conn = open_conn(&state).map_err(AppError::from)?;
+        if let Some(context_id) = filter
+            .context_id
+            .as_deref()
+            .filter(|id| !matches!(*id, INBOX_CONTEXT_ID | CONTENT_BASE_CONTEXT_ID))
+        {
+            validate_user_context_exists(&conn, context_id)?;
+        }
+        let preview =
+            data_cleanup_preview_from_conn(&conn, &state, &filter).map_err(AppError::from)?;
+        if preview.selection_token != selection_token {
+            return Err(AppError::new("cleanup.selection_changed"));
+        }
+        let candidates = cleanup_candidate_ids(&conn, &filter).map_err(AppError::from)?;
+        let ids = candidates.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        let context_ids = ids.iter().try_fold(HashSet::new(), |mut all, id| {
+            for context_id in context_ids_for_capture(&conn, id).map_err(AppError::from)? {
+                all.insert(context_id);
+            }
+            Ok::<_, AppError>(all)
+        })?;
+        let assets = ids.iter().try_fold(Vec::new(), |mut all, id| {
+            all.extend(assets_for_capture(&conn, id).map_err(AppError::from)?);
+            Ok::<_, AppError>(all)
+        })?;
+        let transaction = conn
+            .transaction()
+            .map_err(|error| AppError::from(err(error)))?;
+        for id in &ids {
+            transaction
+                .execute("DELETE FROM captures WHERE id = ?", [id])
+                .map_err(|error| AppError::from(err(error)))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| AppError::from(err(error)))?;
+        for asset in assets {
+            if let Some(path) = asset.path {
+                let _ = secure_remove_file(Path::new(&path));
+            }
+        }
+        for id in &ids {
+            let _ = secure_remove_dir(&state.clipboard_files_dir().join(id));
+        }
+        let touched = context_ids.into_iter().collect::<Vec<_>>();
+        sync_contexts_best_effort(&state, &touched);
+        Ok(DataCleanupResult {
+            deleted_count: ids.len(),
+            reclaimed_bytes: preview.reclaimable_bytes,
+        })
+    })
+    .await
+    .map_err(err)??;
+    app.emit("data-reset", Value::Null).map_err(err)?;
+    Ok(result)
+}
+
 #[tauri::command]
 async fn analyze_contexts(
     state: State<'_, AppState>,
@@ -1068,6 +1385,513 @@ fn delete_context(state: State<AppState>, id: String) -> CommandResult<()> {
     transaction.commit().map_err(err)?;
     remove_context_export_best_effort(&state, &old_slug);
     Ok(())
+}
+
+fn validate_smart_context_rule(rule: &SmartContextRuleDto) -> CommandResult<()> {
+    if rule.name.trim().is_empty()
+        || rule.name.trim().chars().count() > 80
+        || !matches!(rule.match_mode.as_str(), "all" | "any")
+        || rule.conditions.is_empty()
+        || rule.conditions.len() > 12
+    {
+        return Err(AppError::new("smart_context.invalid_rule"));
+    }
+    for condition in &rule.conditions {
+        let field_valid = matches!(
+            condition.field.as_str(),
+            "application"
+                | "content_type"
+                | "text"
+                | "file_extension"
+                | "file_path"
+                | "window_title"
+        );
+        let operator_valid = matches!(
+            condition.operator.as_str(),
+            "equals" | "contains" | "matches"
+        );
+        let value = condition.value.trim();
+        if !field_valid
+            || !operator_valid
+            || value.is_empty()
+            || value.chars().count() > 500
+            || (condition.field == "content_type" && condition.operator != "equals")
+            || (condition.operator == "matches"
+                && RegexBuilder::new(value)
+                    .case_insensitive(true)
+                    .build()
+                    .is_err())
+        {
+            return Err(AppError::new("smart_context.invalid_rule"));
+        }
+    }
+    Ok(())
+}
+
+fn smart_context_rule_conditions(
+    conn: &Connection,
+    rule_id: &str,
+) -> Result<Vec<SmartContextConditionDto>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, field, operator, value
+             FROM context_rule_conditions WHERE rule_id = ? ORDER BY ordinal",
+        )
+        .map_err(err)?;
+    let conditions = stmt
+        .query_map([rule_id], |row| {
+            Ok(SmartContextConditionDto {
+                id: Some(row.get(0)?),
+                field: row.get(1)?,
+                operator: row.get(2)?,
+                value: row.get(3)?,
+            })
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    Ok(conditions)
+}
+
+fn list_context_rules_from_conn(
+    conn: &Connection,
+    context_id: &str,
+) -> Result<Vec<SmartContextRuleDto>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, context_id, name, enabled, match_mode, created_at, updated_at
+             FROM context_rules WHERE context_id = ? ORDER BY lower(name), created_at",
+        )
+        .map_err(err)?;
+    let rows = stmt
+        .query_map([context_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)? != 0,
+                row.get::<_, String>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    drop(stmt);
+
+    rows.into_iter()
+        .map(
+            |(id, context_id, name, enabled, match_mode, created_at, updated_at)| {
+                Ok(SmartContextRuleDto {
+                    conditions: smart_context_rule_conditions(conn, &id)?,
+                    id: Some(id),
+                    context_id,
+                    name,
+                    enabled,
+                    match_mode,
+                    created_at: Some(created_at),
+                    updated_at: Some(updated_at),
+                })
+            },
+        )
+        .collect()
+}
+
+#[tauri::command]
+fn list_context_rules(
+    state: State<AppState>,
+    context_id: String,
+) -> CommandResult<Vec<SmartContextRuleDto>> {
+    let conn = open_conn(&state)?;
+    validate_user_context_exists(&conn, &context_id)?;
+    command_result(list_context_rules_from_conn(&conn, &context_id))
+}
+
+fn smart_capture_types(capture: &CaptureDto) -> Vec<String> {
+    if capture.content_kind == "files" {
+        let mut values = vec!["files".to_string()];
+        if capture
+            .files
+            .iter()
+            .any(|file| file.entry_kind == "application")
+        {
+            values.push("application".into());
+        }
+        if capture
+            .files
+            .iter()
+            .any(|file| file.entry_kind == "directory")
+        {
+            values.push("folder".into());
+        }
+        if capture.files.iter().any(|file| {
+            matches!(
+                file.entry_kind.as_str(),
+                "file" | "shortcut" | "virtual_file"
+            )
+        }) || capture.files.is_empty()
+        {
+            values.push("file".into());
+        }
+        return values;
+    }
+    match capture.content_kind.as_str() {
+        "image" => vec!["image".into()],
+        "url" => vec!["link".into()],
+        "html" | "rich_text" => vec!["formatted_text".into(), "text".into()],
+        _ => vec!["text".into()],
+    }
+}
+
+fn smart_condition_candidates(capture: &CaptureDto, field: &str) -> Vec<String> {
+    match field {
+        "application" => [
+            capture.source_app_name.as_deref(),
+            capture.source_app_id.as_deref(),
+            capture.source_process_path.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(ToOwned::to_owned)
+        .collect(),
+        "content_type" => smart_capture_types(capture),
+        "window_title" => capture.window_title.iter().cloned().collect(),
+        "file_extension" => capture
+            .files
+            .iter()
+            .filter_map(|file| file.extension.as_deref())
+            .map(|value| value.trim_start_matches('.').to_string())
+            .collect(),
+        "file_path" => capture
+            .files
+            .iter()
+            .flat_map(|file| [file.original_path.as_deref(), file.local_path.as_deref()])
+            .flatten()
+            .map(ToOwned::to_owned)
+            .collect(),
+        "text" => {
+            let mut values = vec![capture.content_text.clone()];
+            values.extend(
+                capture
+                    .representations
+                    .iter()
+                    .filter_map(|representation| representation.text_content.clone()),
+            );
+            values.extend(capture.files.iter().map(|file| file.display_name.clone()));
+            values.extend(capture.tags.iter().cloned());
+            values.extend(capture.entities.iter().map(|entity| entity.value.clone()));
+            if let Some(text) = capture.ocr.as_ref().and_then(|ocr| ocr.text.clone()) {
+                values.push(text);
+            }
+            values
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn smart_condition_matches(capture: &CaptureDto, condition: &SmartContextConditionDto) -> bool {
+    let expected = condition.value.trim();
+    let candidates = smart_condition_candidates(capture, &condition.field);
+    match condition.operator.as_str() {
+        "equals" => candidates
+            .iter()
+            .any(|value| value.trim().eq_ignore_ascii_case(expected)),
+        "contains" => {
+            let expected = expected.to_lowercase();
+            candidates
+                .iter()
+                .any(|value| value.to_lowercase().contains(&expected))
+        }
+        "matches" => RegexBuilder::new(expected)
+            .case_insensitive(true)
+            .build()
+            .is_ok_and(|regex| candidates.iter().any(|value| regex.is_match(value))),
+        _ => false,
+    }
+}
+
+fn smart_rule_matches(capture: &CaptureDto, rule: &SmartContextRuleDto) -> bool {
+    if rule.conditions.is_empty() {
+        return false;
+    }
+    if rule.match_mode == "any" {
+        rule.conditions
+            .iter()
+            .any(|condition| smart_condition_matches(capture, condition))
+    } else {
+        rule.conditions
+            .iter()
+            .all(|condition| smart_condition_matches(capture, condition))
+    }
+}
+
+fn capture_ids_matching_rule(
+    conn: &Connection,
+    rule: &SmartContextRuleDto,
+) -> Result<Vec<String>, String> {
+    const PAGE_SIZE: i64 = 200;
+    let mut matches = Vec::new();
+    let mut offset = 0_i64;
+    loop {
+        let mut stmt = conn
+            .prepare(
+                "SELECT c.id, c.content_text, c.captured_at,
+                        c.source_app_name, c.source_app_id, c.source_process_id,
+                        c.source_process_path, c.window_title, c.window_id, c.platform,
+                        c.metadata_json, c.capture_kind
+                 FROM captures c
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM capture_contexts cc
+                   WHERE cc.capture_id = c.id AND cc.context_id = ?1
+                 )
+                 ORDER BY c.captured_at DESC, c.id
+                 LIMIT ?2 OFFSET ?3",
+            )
+            .map_err(err)?;
+        let mut captures = stmt
+            .query_map(
+                params![rule.context_id, PAGE_SIZE, offset],
+                capture_base_from_row,
+            )
+            .map_err(err)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(err)?;
+        drop(stmt);
+        let page_len = captures.len() as i64;
+        hydrate_captures(conn, &mut captures)?;
+        matches.extend(
+            captures
+                .into_iter()
+                .filter(|capture| smart_rule_matches(capture, rule))
+                .map(|capture| capture.id),
+        );
+        if page_len < PAGE_SIZE {
+            break;
+        }
+        offset += PAGE_SIZE;
+    }
+    Ok(matches)
+}
+
+fn preview_smart_context_rule_from_conn(
+    conn: &Connection,
+    rule: &SmartContextRuleDto,
+) -> Result<SmartContextRulePreview, String> {
+    let matches = capture_ids_matching_rule(conn, rule)?;
+    let samples = matches
+        .iter()
+        .take(5)
+        .map(|id| get_capture_by_id(conn, id))
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(SmartContextRulePreview {
+        match_count: matches.len(),
+        samples,
+    })
+}
+
+#[tauri::command]
+async fn preview_context_rule(
+    state: State<'_, AppState>,
+    rule: SmartContextRuleDto,
+) -> CommandResult<SmartContextRulePreview> {
+    validate_smart_context_rule(&rule)?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<_> {
+        let conn = open_conn(&state).map_err(AppError::from)?;
+        validate_user_context_exists(&conn, &rule.context_id)?;
+        preview_smart_context_rule_from_conn(&conn, &rule).map_err(AppError::from)
+    })
+    .await
+    .map_err(err)?
+}
+
+fn insert_rule_associations(
+    conn: &mut Connection,
+    rule: &SmartContextRuleDto,
+) -> Result<usize, String> {
+    let ids = capture_ids_matching_rule(conn, rule)?;
+    let transaction = conn.transaction().map_err(err)?;
+    let assigned_at = now();
+    let mut added = 0;
+    for capture_id in ids {
+        added += transaction
+            .execute(
+                "INSERT OR IGNORE INTO capture_contexts
+                 (capture_id, context_id, assignment_origin, confidence, created_at)
+                 VALUES (?, ?, 'automatic', 1.0, ?)",
+                params![capture_id, rule.context_id, assigned_at],
+            )
+            .map_err(err)?;
+    }
+    transaction.commit().map_err(err)?;
+    Ok(added)
+}
+
+#[tauri::command]
+async fn save_context_rule(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mut rule: SmartContextRuleDto,
+    apply_to_existing: bool,
+) -> CommandResult<SaveSmartContextRuleResult> {
+    validate_smart_context_rule(&rule)?;
+    rule.name = rule.name.trim().to_string();
+    for condition in &mut rule.conditions {
+        condition.value = condition.value.trim().to_string();
+    }
+    let state = state.inner().clone();
+    let context_id = rule.context_id.clone();
+    let context_id_for_worker = context_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> CommandResult<_> {
+        let mut conn = open_conn(&state).map_err(AppError::from)?;
+        validate_user_context_exists(&conn, &context_id_for_worker)?;
+        if let Some(existing_id) = rule.id.as_deref() {
+            let owner = conn
+                .query_row(
+                    "SELECT context_id FROM context_rules WHERE id = ?",
+                    [existing_id],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+                .map_err(|error| AppError::from(err(error)))?;
+            if owner.as_deref() != Some(context_id_for_worker.as_str()) {
+                return Err(AppError::new("smart_context.rule_not_found"));
+            }
+        }
+        let timestamp = now();
+        let rule_id = rule.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string());
+        let created_at = rule.created_at.clone().unwrap_or_else(|| timestamp.clone());
+        let transaction = conn
+            .transaction()
+            .map_err(|error| AppError::from(err(error)))?;
+        transaction
+            .execute(
+                "INSERT INTO context_rules (id, context_id, name, enabled, match_mode, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(id) DO UPDATE SET
+                   name = excluded.name,
+                   enabled = excluded.enabled,
+                   match_mode = excluded.match_mode,
+                   updated_at = excluded.updated_at",
+                params![
+                    rule_id,
+                    &context_id_for_worker,
+                    rule.name,
+                    i64::from(rule.enabled),
+                    rule.match_mode,
+                    created_at,
+                    timestamp
+                ],
+            )
+            .map_err(|error| AppError::from(err(error)))?;
+        transaction
+            .execute("DELETE FROM context_rule_conditions WHERE rule_id = ?", [&rule_id])
+            .map_err(|error| AppError::from(err(error)))?;
+        for (ordinal, condition) in rule.conditions.iter().enumerate() {
+            transaction
+                .execute(
+                    "INSERT INTO context_rule_conditions
+                     (id, rule_id, ordinal, field, operator, value, created_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    params![
+                        condition.id.clone().unwrap_or_else(|| Uuid::new_v4().to_string()),
+                        rule_id,
+                        ordinal as i64,
+                        condition.field,
+                        condition.operator,
+                        condition.value,
+                        timestamp
+                    ],
+                )
+                .map_err(|error| AppError::from(err(error)))?;
+        }
+        transaction
+            .commit()
+            .map_err(|error| AppError::from(err(error)))?;
+        let saved = list_context_rules_from_conn(&conn, &context_id_for_worker)
+            .map_err(AppError::from)?
+            .into_iter()
+            .find(|candidate| candidate.id.as_deref() == Some(rule_id.as_str()))
+            .ok_or_else(|| AppError::new("smart_context.rule_not_found"))?;
+        let associations_added = if apply_to_existing && saved.enabled {
+            insert_rule_associations(&mut conn, &saved).map_err(AppError::from)?
+        } else {
+            0
+        };
+        Ok((saved, associations_added, state))
+    })
+    .await
+    .map_err(err)?;
+
+    let (saved, associations_added, state) = result?;
+    if associations_added > 0 {
+        sync_contexts_best_effort(&state, std::slice::from_ref(&context_id));
+        app.emit("capture-contexts-updated", &context_id)
+            .map_err(err)?;
+    }
+    Ok(SaveSmartContextRuleResult {
+        rule: saved,
+        associations_added,
+    })
+}
+
+#[tauri::command]
+fn delete_context_rule(state: State<AppState>, rule_id: String) -> CommandResult<()> {
+    let conn = open_conn(&state)?;
+    let deleted = conn
+        .execute("DELETE FROM context_rules WHERE id = ?", [&rule_id])
+        .map_err(err)?;
+    if deleted == 0 {
+        return Err(AppError::new("smart_context.rule_not_found"));
+    }
+    Ok(())
+}
+
+fn enabled_context_rules(conn: &Connection) -> Result<Vec<SmartContextRuleDto>, String> {
+    let mut stmt = conn
+        .prepare("SELECT DISTINCT context_id FROM context_rules WHERE enabled = 1")
+        .map_err(err)?;
+    let context_ids = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    drop(stmt);
+    let mut rules = Vec::new();
+    for context_id in context_ids {
+        rules.extend(
+            list_context_rules_from_conn(conn, &context_id)?
+                .into_iter()
+                .filter(|rule| rule.enabled),
+        );
+    }
+    Ok(rules)
+}
+
+fn apply_smart_context_rules(conn: &Connection, capture_id: &str) -> Result<Vec<String>, String> {
+    let capture = get_capture_by_id(conn, capture_id)?;
+    let assigned_at = now();
+    let mut context_ids = Vec::new();
+    for rule in enabled_context_rules(conn)? {
+        if !smart_rule_matches(&capture, &rule) {
+            continue;
+        }
+        let added = conn
+            .execute(
+                "INSERT OR IGNORE INTO capture_contexts
+                 (capture_id, context_id, assignment_origin, confidence, created_at)
+                 VALUES (?, ?, 'automatic', 1.0, ?)",
+                params![capture_id, rule.context_id, assigned_at],
+            )
+            .map_err(err)?;
+        if added > 0 {
+            context_ids.push(rule.context_id);
+        }
+    }
+    context_ids.sort();
+    context_ids.dedup();
+    Ok(context_ids)
 }
 
 #[tauri::command]
@@ -2203,32 +3027,41 @@ fn persist_clipboard_payload(
         }
     }
 
-    let postprocess_result = (|| -> Result<(), String> {
+    let postprocess_result = (|| -> Result<Vec<String>, String> {
         let transaction = conn.transaction().map_err(err)?;
         if screenshot_enabled(&settings, origin, capture_kind) {
             insert_screenshot_asset(&transaction, &state, &capture_id, &active_window)?;
         }
         process_local_analysis(&transaction, &capture_id)?;
+        let automatic_context_ids = apply_smart_context_rules(&transaction, &capture_id)?;
         enqueue_ocr_job(&transaction, &capture_id)?;
-        transaction.commit().map_err(err)
+        transaction.commit().map_err(err)?;
+        Ok(automatic_context_ids)
     })();
 
-    if let Err(error) = postprocess_result {
-        eprintln!("Capture {capture_id} was saved, but background enrichment failed: {error}");
-    } else {
-        kick_ocr_worker(app.clone(), state.clone());
-        if let Ok(updated) = get_capture_by_id(&conn, &capture_id) {
-            capture = updated;
-            let _ = app.emit(
-                "capture-analysis-updated",
-                CaptureUpdatedEvent {
-                    capture: capture.clone(),
-                },
-            );
+    match postprocess_result {
+        Err(error) => {
+            eprintln!("Capture {capture_id} was saved, but background enrichment failed: {error}");
+        }
+        Ok(automatic_context_ids) => {
+            kick_ocr_worker(app.clone(), state.clone());
+            if !automatic_context_ids.is_empty() {
+                let _ = app.emit("capture-contexts-updated", &capture_id);
+            }
+            if let Ok(updated) = get_capture_by_id(&conn, &capture_id) {
+                capture = updated;
+                let _ = app.emit(
+                    "capture-analysis-updated",
+                    CaptureUpdatedEvent {
+                        capture: capture.clone(),
+                    },
+                );
+            }
         }
     }
 
-    sync_contexts_best_effort(&state, &[context_id.to_string()]);
+    let context_ids = context_ids_for_capture(&conn, &capture_id).unwrap_or_default();
+    sync_contexts_best_effort(&state, &context_ids);
 
     Ok(capture)
 }
@@ -5116,6 +5949,27 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             PRIMARY KEY (capture_id, context_id)
         );
 
+        CREATE TABLE IF NOT EXISTS context_rules (
+            id TEXT PRIMARY KEY,
+            context_id TEXT NOT NULL REFERENCES contexts(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            match_mode TEXT NOT NULL CHECK (match_mode IN ('all', 'any')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS context_rule_conditions (
+            id TEXT PRIMARY KEY,
+            rule_id TEXT NOT NULL REFERENCES context_rules(id) ON DELETE CASCADE,
+            ordinal INTEGER NOT NULL,
+            field TEXT NOT NULL,
+            operator TEXT NOT NULL,
+            value TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(rule_id, ordinal)
+        );
+
         CREATE TABLE IF NOT EXISTS capture_entities (
             id TEXT PRIMARY KEY,
             capture_id TEXT NOT NULL REFERENCES captures(id) ON DELETE CASCADE,
@@ -5183,6 +6037,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
         CREATE INDEX IF NOT EXISTS idx_captures_captured_at ON captures(captured_at);
         CREATE INDEX IF NOT EXISTS idx_capture_contexts_context ON capture_contexts(context_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_context_rules_context ON context_rules(context_id, enabled, updated_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_context_rule_conditions_rule ON context_rule_conditions(rule_id, ordinal);
         CREATE INDEX IF NOT EXISTS idx_capture_tags_tag ON capture_tags(tag);
         CREATE INDEX IF NOT EXISTS idx_capture_entities_kind_value ON capture_entities(kind, value);
         CREATE INDEX IF NOT EXISTS idx_ocr_jobs_status ON ocr_jobs(status, queued_at);
@@ -5797,7 +6653,12 @@ fn kick_ocr_worker(app: AppHandle, state: AppState) {
 
             let result = run_local_ocr(Path::new(&path));
             if let Ok(mut conn) = open_conn(&state) {
-                let _ = finish_ocr_job(&mut conn, &capture_id, result);
+                let automatic_context_ids =
+                    finish_ocr_job(&mut conn, &capture_id, result).unwrap_or_default();
+                if !automatic_context_ids.is_empty() {
+                    sync_contexts_best_effort(&state, &automatic_context_ids);
+                    let _ = app.emit("capture-contexts-updated", &capture_id);
+                }
                 if let Ok(capture) = get_capture_by_id(&conn, &capture_id) {
                     let _ = app.emit("capture-analysis-updated", CaptureUpdatedEvent { capture });
                 }
@@ -5847,7 +6708,7 @@ fn finish_ocr_job(
     conn: &mut Connection,
     capture_id: &str,
     result: Result<String, String>,
-) -> Result<(), String> {
+) -> Result<Vec<String>, String> {
     let transaction = conn.transaction().map_err(err)?;
     let timestamp = now();
     match result {
@@ -5873,7 +6734,9 @@ fn finish_ocr_job(
             ).map_err(err)?;
         }
     }
-    transaction.commit().map_err(err)
+    let automatic_context_ids = apply_smart_context_rules(&transaction, capture_id)?;
+    transaction.commit().map_err(err)?;
+    Ok(automatic_context_ids)
 }
 
 fn index_ocr_text(conn: &Connection, capture_id: &str, text: &str) -> Result<(), String> {
@@ -7514,6 +8377,10 @@ pub fn run() {
             create_context,
             rename_context,
             delete_context,
+            list_context_rules,
+            preview_context_rule,
+            save_context_rule,
+            delete_context_rule,
             add_capture_contexts,
             add_captures_to_context,
             remove_capture_context,
@@ -7522,6 +8389,8 @@ pub fn run() {
             update_settings,
             clear_ai_api_key,
             delete_all_data,
+            preview_data_cleanup,
+            delete_data_by_filter,
             get_ai_provider_options,
             ask_chat,
             get_tag_document,
@@ -8206,5 +9075,117 @@ mod tests {
         )
         .expect("test capture should insert");
         id
+    }
+
+    fn insert_test_context(conn: &Connection, id: &str, name: &str) {
+        let timestamp = now();
+        conn.execute(
+            "INSERT INTO contexts (id, name, normalized_name, slug, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+            params![id, name, name.to_lowercase(), id, timestamp, timestamp],
+        )
+        .expect("test context should insert");
+    }
+
+    #[test]
+    fn smart_context_rules_support_composed_conditions_and_automatic_assignment() {
+        let conn = duplicate_test_connection();
+        let capture_id = insert_duplicate_test_capture(
+            &conn,
+            "Design system review notes",
+            &now(),
+            CaptureOrigin::ClipboardMonitor,
+        );
+        insert_test_context(&conn, "design", "Design");
+        let timestamp = now();
+        conn.execute(
+            "INSERT INTO context_rules
+             (id, context_id, name, enabled, match_mode, created_at, updated_at)
+             VALUES ('design-rule', 'design', 'Design work', 1, 'all', ?, ?)",
+            params![timestamp, timestamp],
+        )
+        .expect("test rule should insert");
+        conn.execute(
+            "INSERT INTO context_rule_conditions
+             (id, rule_id, ordinal, field, operator, value, created_at)
+             VALUES ('design-app', 'design-rule', 0, 'application', 'equals', 'Editor', ?),
+                    ('design-text', 'design-rule', 1, 'text', 'contains', 'review', ?)",
+            params![timestamp, timestamp],
+        )
+        .expect("test conditions should insert");
+
+        assert_eq!(
+            apply_smart_context_rules(&conn, &capture_id).expect("smart rules should evaluate"),
+            vec!["design"]
+        );
+        let assignment: (String, f64) = conn
+            .query_row(
+                "SELECT assignment_origin, confidence FROM capture_contexts
+                 WHERE capture_id = ? AND context_id = 'design'",
+                [&capture_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("automatic assignment should exist");
+        assert_eq!(assignment, ("automatic".into(), 1.0));
+
+        assert!(apply_smart_context_rules(&conn, &capture_id)
+            .expect("repeated evaluation should be idempotent")
+            .is_empty());
+    }
+
+    #[test]
+    fn cleanup_filters_compose_type_period_and_context() {
+        let conn = duplicate_test_connection();
+        insert_test_context(&conn, "design", "Design");
+        let recent = now();
+        let old = (Utc::now() - chrono::TimeDelta::minutes(20)).to_rfc3339();
+        let recent_image = insert_duplicate_test_capture(
+            &conn,
+            "Recent image",
+            &recent,
+            CaptureOrigin::ClipboardMonitor,
+        );
+        let old_image = insert_duplicate_test_capture(
+            &conn,
+            "Old image",
+            &old,
+            CaptureOrigin::ClipboardMonitor,
+        );
+        let recent_text = insert_duplicate_test_capture(
+            &conn,
+            "Recent text",
+            &recent,
+            CaptureOrigin::ClipboardMonitor,
+        );
+        for (ordinal, capture_id) in [&recent_image, &old_image].into_iter().enumerate() {
+            conn.execute(
+                "INSERT INTO capture_representations
+                 (id, capture_id, ordinal, kind, format_name, restorable, metadata_json, created_at)
+                 VALUES (?, ?, 0, 'image', 'PNG', 1, '{}', ?)",
+                params![format!("image-{ordinal}"), capture_id, recent],
+            )
+            .expect("test image representation should insert");
+        }
+        for capture_id in [&recent_image, &recent_text] {
+            conn.execute(
+                "INSERT INTO capture_contexts
+                 (capture_id, context_id, assignment_origin, confidence, created_at)
+                 VALUES (?, 'design', 'manual', NULL, ?)",
+                params![capture_id, recent],
+            )
+            .expect("test context assignment should insert");
+        }
+
+        let filter = DataCleanupFilter {
+            content_types: vec!["image".into()],
+            context_id: Some("design".into()),
+            period_minutes: Some(10),
+        };
+        let candidates =
+            cleanup_candidate_ids(&conn, &filter).expect("composed cleanup filter should query");
+        assert_eq!(
+            candidates.into_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            vec![recent_image]
+        );
     }
 }

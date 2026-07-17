@@ -20,6 +20,8 @@ import type { LiteIconName } from "./LiteIcon";
 import { LiteSettingsDialog } from "./LiteSettingsDialog";
 import { AppUpdateNotice } from "../updates/AppUpdateNotice";
 import { useAppUpdater } from "../updates/useAppUpdater";
+import { DataCleanupDialog, formatBytes } from "./DataCleanupDialog";
+import { SmartContextDialog } from "./SmartContextDialog";
 
 const capturePageSize = 50;
 
@@ -41,7 +43,7 @@ export function LiteMainApp() {
   );
   const [requestedDocumentId, setRequestedDocumentId] = useState<string | null>(null);
   const [selectedContextId, setSelectedContextId] = useState<string | null>(
-    docsPreview === "context-picker" ? "product-launch" : null,
+    docsPreview === "context-picker" || docsPreview === "smart-context" ? "product-launch" : null,
   );
   const [search, setSearch] = useState("");
   const [capturePage, setCapturePage] = useState(0);
@@ -49,6 +51,8 @@ export function LiteMainApp() {
   const [searchMode, setSearchMode] = useState<"local" | "magic">("local");
   const [detail, setDetail] = useState<Capture | null>(null);
   const [isContextPickerOpen, setIsContextPickerOpen] = useState(docsPreview === "context-picker");
+  const [isSmartContextOpen, setIsSmartContextOpen] = useState(docsPreview === "smart-context");
+  const [isCleanupOpen, setIsCleanupOpen] = useState(docsPreview === "cleanup");
   const [newContextName, setNewContextName] = useState("");
   const [isNewContextOpen, setIsNewContextOpen] = useState(false);
   const [isCreatingContext, setIsCreatingContext] = useState(false);
@@ -313,9 +317,17 @@ export function LiteMainApp() {
             <span className="lite-eyebrow">{selectedContextId ? tr("Context") : tr("Clipboard history")}</span>
             <h1>{selectedContext?.name ?? tr("Everything you copied")}</h1>
           </div>
-          {selectedContext && <button className="lite-context-add-button" onClick={() => setIsContextPickerOpen(true)}>
-            <LiteIcon name="plus" />{tr("Add items")}
-          </button>}
+          <div className="lite-topbar-actions">
+            {selectedContext && <button className="lite-context-automation-button" onClick={() => setIsSmartContextOpen(true)}>
+              <LiteIcon name="sparkles" />{tr("Automation")}
+            </button>}
+            {selectedContext && <button className="lite-context-add-button" onClick={() => setIsContextPickerOpen(true)}>
+              <LiteIcon name="plus" />{tr("Add items")}
+            </button>}
+            <button className="lite-topbar-delete" onClick={() => setIsCleanupOpen(true)} aria-label={tr("Clean up data")} title={tr("Clean up data")}>
+              <LiteIcon name="trash" />
+            </button>
+          </div>
         </header>
 
         {status && <div className="lite-status"><LiteIcon name="info" /><span>{tr(status)}</span><button onClick={() => setStatus(null)}><LiteIcon name="close" /></button></div>}
@@ -387,6 +399,33 @@ export function LiteMainApp() {
         onAdded={async (count) => {
           setStatus(tr("Added {count} items to {name}.", { count, name: selectedContext.name }));
           await refreshAll({ contextId: selectedContext.id, search, page: capturePage });
+        }}
+        onError={setStatus}
+      />}
+
+      {isSmartContextOpen && selectedContext && <SmartContextDialog
+        context={selectedContext}
+        language={language}
+        onClose={() => setIsSmartContextOpen(false)}
+        onChanged={async (message) => {
+          setStatus(message);
+          await refreshAll({ contextId: selectedContext.id, search, page: capturePage });
+        }}
+        onError={setStatus}
+      />}
+
+      {isCleanupOpen && <DataCleanupDialog
+        contexts={contexts}
+        language={language}
+        onClose={() => setIsCleanupOpen(false)}
+        onDeleted={async (result) => {
+          setDetail(null);
+          setCapturePage(0);
+          setStatus(tr("Deleted {count} captures and reclaimed up to {size}.", {
+            count: result.deleted_count,
+            size: formatBytes(result.reclaimed_bytes, language),
+          }));
+          await refreshAll({ contextId: selectedContextId, search, page: 0 });
         }}
         onError={setStatus}
       />}

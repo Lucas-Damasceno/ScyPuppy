@@ -30,6 +30,14 @@ This gallery documents the public interface and the UX rules behind its main wor
 - Preserve multi-selection while the user refines the query.
 - Keep the selected count and final action together in the footer.
 
+## Smart Contexts and selective cleanup
+
+- Open **Automation** only from a selected Context so every rule has an obvious destination.
+- Preview existing rule matches without changing assignments, then make backfilling an explicit opt-in.
+- Keep all rule evaluation local and explain that OCR can complete a match later.
+- Put cleanup at the far right of the capture workspace title actions and require a filter preview plus a second confirmation.
+- Show the exact capture count, content breakdown, Context scope, and estimated reclaimed space before permanent deletion.
+
 ## Ask ScryPuppy
 
 ![Ask ScryPuppy document mode](docs/screenshots/scrypuppy-ask-document.png)
@@ -93,6 +101,8 @@ Then open the relevant URL at the documented viewport:
 | --- | --- | --- |
 | Main workspace | `http://127.0.0.1:4173/?docs-preview=main` | 1100×720 |
 | Context picker | `http://127.0.0.1:4173/?docs-preview=context-picker` | 1100×720 |
+| Smart Contexts | `http://127.0.0.1:4173/?docs-preview=smart-context` | 1100×720 |
+| Selective cleanup | `http://127.0.0.1:4173/?docs-preview=cleanup` | 1100×720 |
 | Documents | `http://127.0.0.1:4173/?docs-preview=documents` | 1280×800 |
 | Settings | `http://127.0.0.1:4173/?docs-preview=settings` | 1100×720 |
 | Ask ScryPuppy | `http://127.0.0.1:4173/?docs-preview=ask-document&window-label=magic-search` | 720×560 |
