@@ -11,9 +11,14 @@ The Actions page exposes three workflows with distinct responsibilities:
   installer without publishing anything.
 - **Beta Release** (`.github/workflows/automatic-beta-release.yml`) reacts only to
   merged `feat/` and `fix/` pull requests and queues the next automatic beta.
-- **Windows Release** (`.github/workflows/windows-release.yml`) is the shared,
-  reusable packaging pipeline. It also provides the manual and tag-based recovery
-  path for signed releases.
+- **Windows Release** (`.github/workflows/windows-release.yml`) performs signed
+  packaging and publication for the beta orchestrator. It also provides the manual
+  and tag-based recovery path.
+
+The CI and release workflows deliberately have separate permission boundaries. CI
+has read-only repository access and cannot publish releases; both paths invoke the
+same checked-in validation commands and `scripts/build-windows.ps1` so the installer
+construction and startup probe remain consistent.
 
 Merging a pull request whose source branch starts with `feat/` or `fix/` queues an
 automatic beta release. The workflow increments the beta number, runs the same
