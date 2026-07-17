@@ -73,6 +73,39 @@ export type ApplyContextSuggestion = {
   capture_ids: string[]; confidence: number;
 };
 export type ApplyContextSuggestionsResult = { contexts_created: number; associations_added: number };
+export type SmartContextCondition = {
+  id: string | null;
+  field: "application" | "content_type" | "text" | "file_extension" | "file_path" | "window_title";
+  operator: "equals" | "contains" | "matches";
+  value: string;
+};
+export type SmartContextRule = {
+  id: string | null;
+  context_id: string;
+  name: string;
+  enabled: boolean;
+  match_mode: "all" | "any";
+  conditions: SmartContextCondition[];
+  created_at: string | null;
+  updated_at: string | null;
+};
+export type SmartContextRulePreview = { match_count: number; samples: Capture[] };
+export type SaveSmartContextRuleResult = { rule: SmartContextRule; associations_added: number };
+export type DataCleanupFilter = {
+  content_types: Array<"text" | "image" | "link" | "file" | "folder" | "application">;
+  context_id: string | null;
+  period_minutes: number | null;
+};
+export type DataCleanupPreview = {
+  selection_token: string;
+  capture_count: number;
+  image_count: number;
+  file_count: number;
+  reclaimable_bytes: number;
+  oldest_captured_at: string | null;
+  newest_captured_at: string | null;
+};
+export type DataCleanupResult = { deleted_count: number; reclaimed_bytes: number };
 export type CaptureFilter = { context_id: string | null; search: string | null; tag: string | null; limit: number; offset: number };
 export type CapturePage = { items: Capture[]; total: number };
 export type ChatRequest = { query: string; context_id: string | null; app: string | null; date_from: string | null; date_to: string | null; limit: number };

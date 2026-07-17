@@ -1,6 +1,7 @@
 import { createDefaultSettings } from "../config/defaultSettings";
 import type {
-  Capture, Context, ContextAssignment, MagicSearchDocument, MagicSearchListItem, Settings,
+  Capture, Context, ContextAssignment, DataCleanupFilter, MagicSearchDocument, MagicSearchListItem,
+  Settings, SmartContextRule,
 } from "../types";
 
 const previewKey = "docs-preview";
@@ -148,6 +149,20 @@ const previewDocumentHistory: MagicSearchListItem[] = [{
   response_mode: "document",
 }];
 
+let smartRules: SmartContextRule[] = [{
+  id: "design-work",
+  context_id: productLaunch.id,
+  name: "Design work",
+  enabled: true,
+  match_mode: "all",
+  conditions: [
+    { id: "design-app", field: "application", operator: "contains", value: "Documents" },
+    { id: "design-text", field: "text", operator: "contains", value: "design" },
+  ],
+  created_at: new Date(Date.now() - 86_400_000).toISOString(),
+  updated_at: new Date().toISOString(),
+}];
+
 let settings: Settings = createDefaultSettings({
   language: "en",
   onboarding_completed: true,
@@ -206,6 +221,34 @@ export function installDocsPreview(): void {
       if (command === "plugin:event|listen") return callbackId;
       if (command === "plugin:event|unlisten" || command === "plugin:event|emit" || command === "plugin:event|emit_to") return undefined;
       if (command === "list_contexts") return [productLaunch, research];
+      if (command === "list_context_rules") return smartRules;
+      if (command === "preview_context_rule") return { match_count: 3, samples: [captures[2], captures[7]] };
+      if (command === "save_context_rule") {
+        const rule = (args as { rule?: SmartContextRule } | undefined)?.rule;
+        if (!rule) return undefined;
+        const saved = { ...rule, id: rule.id ?? `rule-${Date.now()}`, updated_at: new Date().toISOString() };
+        smartRules = [...smartRules.filter((candidate) => candidate.id !== saved.id), saved];
+        return { rule: saved, associations_added: 3 };
+      }
+      if (command === "delete_context_rule") {
+        const ruleId = (args as { ruleId?: string } | undefined)?.ruleId;
+        smartRules = smartRules.filter((rule) => rule.id !== ruleId);
+        return undefined;
+      }
+      if (command === "preview_data_cleanup") {
+        const filter = (args as { filter?: DataCleanupFilter } | undefined)?.filter;
+        const imageOnly = filter?.content_types.length === 1 && filter.content_types[0] === "image";
+        return {
+          selection_token: "docs-preview-selection",
+          capture_count: imageOnly ? 4 : 7,
+          image_count: imageOnly ? 4 : 3,
+          file_count: imageOnly ? 0 : 2,
+          reclaimable_bytes: imageOnly ? 8_493_056 : 14_417_920,
+          oldest_captured_at: captures.at(-1)?.captured_at ?? null,
+          newest_captured_at: captures[0].captured_at,
+        };
+      }
+      if (command === "delete_data_by_filter") return { deleted_count: 7, reclaimed_bytes: 14_417_920 };
       if (command === "get_library_counts") return { all: 24, inbox: 10, content_base: 3 };
       if (command === "list_categories") return [];
       if (command === "list_captures") return filterCaptures(args);

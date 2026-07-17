@@ -28,7 +28,7 @@ Capture useful information, keep its source, organize it into Contexts, and turn
 ScryPuppy turns selected clipboard content into a private, searchable knowledge layer:
 
 1. **Capture** text, rich content, links, images, files, folders, shortcuts, applications, and virtual attachments with their source application and window metadata.
-2. **Organize** a capture into one or several reusable Contexts.
+2. **Organize** a capture into one or several reusable Contexts, manually or with local Smart Context rules.
 3. **Retrieve** previous content through local search or Quick Paste.
 4. **Condense** related captures into editable Markdown documents with numbered sources.
 
@@ -71,6 +71,8 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 - Lossless Quick Paste restores every still-available representation instead of reducing files or images to labels.
 - Source application, window metadata, local OCR, file availability, and integrity metadata.
 - Many-to-many Context organization: one capture can belong to several Contexts.
+- Smart Context automations route new captures locally by application, content type, text or OCR, file extension, file path, and window title.
+- Selective cleanup previews and permanently removes captures by content type, period, and Context without deleting settings, documents, or credentials.
 - Unified Local Search and Magic Search entry point.
 - Quick Paste history available from any application.
 - Editable, versioned Markdown documents with durable evidence snapshots.
@@ -93,7 +95,7 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 > [!IMPORTANT]
 > If clipboard monitoring is enabled, ordinary copied content may be retained locally, including files, credentials, or confidential content. Physical files remain references; virtual files can be copied into ScryPuppy's local data directory. Review the library regularly and enable only the automatic behaviors you need.
 
-The exact application-data directory is shown in Settings. During uninstall, the user can choose whether to keep or remove ScryPuppy data.
+The exact application-data directory is shown in Settings. The main workspace trash action can remove a narrowly filtered set of captures after a count and storage preview. During uninstall, the user can choose whether to keep or remove ScryPuppy data.
 
 ## Shortcuts
 

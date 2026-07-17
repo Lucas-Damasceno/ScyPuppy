@@ -1,7 +1,7 @@
 export type LiteIconName =
   | "arrow" | "check" | "chevron" | "close" | "copy" | "download" | "edit" | "export" | "eye" | "file" | "folder"
-  | "globe" | "info" | "layers" | "loader" | "lock" | "plus" | "refresh" | "search"
-  | "settings" | "sparkles" | "trash";
+  | "globe" | "image" | "info" | "layers" | "loader" | "lock" | "plus" | "refresh" | "search"
+  | "settings" | "sparkles" | "trash" | "window";
 
 const iconPaths: Record<LiteIconName, string[]> = {
   arrow: ["M5 12h14", "M13 6l6 6-6 6"],
@@ -16,6 +16,7 @@ const iconPaths: Record<LiteIconName, string[]> = {
   file: ["M6 3h8l4 4v14H6z", "M14 3v5h5", "M9 13h6", "M9 17h6"],
   folder: ["M3 6h7l2 2h9v11H3z"],
   globe: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z", "M3 12h18", "M12 3c2.4 2.5 3.5 5.5 3.5 9S14.4 18.5 12 21c-2.4-2.5-3.5-5.5-3.5-9S9.6 5.5 12 3Z"],
+  image: ["M4 4h16v16H4z", "m4 16 4.5-5 3.5 4 2.5-3 5.5 6", "M15.5 8.5h.01"],
   info: ["M12 11v6", "M12 7h.01", "M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"],
   layers: ["m12 3 9 5-9 5-9-5Z", "m3 12 9 5 9-5", "m3 16 9 5 9-5"],
   loader: ["M21 12a9 9 0 1 1-6.2-8.6"],
@@ -29,6 +30,7 @@ const iconPaths: Record<LiteIconName, string[]> = {
   ],
   sparkles: ["m12 3 1.2 3.8L17 8l-3.8 1.2L12 13l-1.2-3.8L7 8l3.8-1.2Z", "m19 14 .8 2.2L22 17l-2.2.8L19 20l-.8-2.2L16 17l2.2-.8Z", "m5 13 .7 2.3L8 16l-2.3.7L5 19l-.7-2.3L2 16l2.3-.7Z"],
   trash: ["M4 7h16", "M9 7V4h6v3", "m6 7 1 14h10l1-14", "M10 11v6", "M14 11v6"],
+  window: ["M3 5h18v14H3z", "M3 9h18", "M7 7h.01", "M10 7h.01"],
 };
 
 export function LiteIcon({ name, size = 17 }: { name: LiteIconName; size?: number }) {

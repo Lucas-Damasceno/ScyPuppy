@@ -45,6 +45,8 @@ Each secondary window has a minimal capability file in `src-tauri/capabilities/`
 - `src/features/lite/LiteMagicPalette.tsx` — quick answers and cited document creation.
 - `src/features/lite/LiteDocumentsWorkspace.tsx` — editable Markdown, versions, and evidence management.
 - `src/features/lite/AddItemsToContextDialog.tsx` — local filtering and transactional multi-assignment.
+- `src/features/lite/SmartContextDialog.tsx` — local rule creation, match previews, and automation management.
+- `src/features/lite/DataCleanupDialog.tsx` — selective destructive filtering with a server-verified preview.
 - `src/features/lite/CaptureDetailsDialog.tsx` — source metadata, Context membership, assets, and OCR.
 - `src/components/OnboardingTutorial.tsx` — six-step first-run and replayable onboarding.
 - `src/components/SettingsControls.tsx` — shared controls used by Settings and onboarding.
@@ -156,6 +158,8 @@ The encrypted SQLite schema is created and evolved in `migrate()`.
 | `capture_clipboard_formats` | Supported and unsupported Windows clipboard format metadata |
 | `contexts` | User-managed normalized Contexts |
 | `capture_contexts` | Many-to-many Context assignments with origin and confidence |
+| `context_rules` | Smart Context rule identity, state, and all/any match mode |
+| `context_rule_conditions` | Ordered application, type, text/OCR, file, and window conditions |
 | `capture_tags` | Deterministic content descriptors |
 | `capture_entities` | URLs, paths, applications, hashes, UUIDs, and other anchors |
 | `capture_ocr` | Latest OCR result for each capture |
@@ -172,9 +176,17 @@ The Lite workspace exposes **Everything**, user-created Contexts, and Documents.
 
 Users can create a Context, assign it from capture details, or add several existing captures through a local-only picker. Bulk assignment is validated and committed in one Rust transaction.
 
+Smart Context rules are explicit, per-Context automations. The user can combine up to 12 local conditions with **all** or **any** semantics, preview existing matches without changing data, and optionally apply a rule to existing captures while saving. Enabled rules run after deterministic local analysis and again after OCR completes. Automatic assignments are idempotent, retain their origin, and never remove manual or other Context assignments.
+
 The backend retains deterministic and optional AI-assisted organization for compatibility. Local analysis considers URLs, repositories, applications, window titles, paths, commands, hashes, UUIDs, tags, entities, existing Contexts, and temporal proximity. Suggestions are reviewable and never remove manual associations.
 
 Optional AI receives bounded safe text and metadata only. Binary payloads and complete file paths are excluded. Images and screenshots are excluded, relevant redacted OCR text is treated as text evidence, and local results remain available if a provider fails.
+
+## Selective data cleanup
+
+The main workspace exposes a destructive cleanup flow separate from Settings' full reset. A typed filter can combine capture type, relative time period, and Context. Preview and deletion use the same backend query. The preview returns a token derived from the ordered matching capture IDs; deletion recomputes it inside the command and refuses to continue if the selection changed in the meantime.
+
+Deletion removes matching capture records transactionally, then securely removes their managed image, screenshot, and materialized-file assets. Affected Context exports are regenerated. Context definitions, settings, credentials, and generated documents are intentionally outside this tool's scope and are named in the confirmation UI.
 
 ## Search and documents
 

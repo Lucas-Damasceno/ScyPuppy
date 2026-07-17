@@ -2,8 +2,9 @@ import { invoke as tauriInvoke } from "@tauri-apps/api/core";
 import { normalizeCommandError } from "../appMessages";
 import type {
   AiProviderOption, ApplyContextSuggestion, ApplyContextSuggestionsResult, Capture, CaptureFilter, CapturePage, Category,
-  ChatAnswer, ChatRequest, Context, ContextAnalysisResult, LibraryCounts, MagicSearchDocument,
-  MagicSearchListItem, MagicSearchPreview, MagicSearchRequest, Settings, TagDocument,
+  ChatAnswer, ChatRequest, Context, ContextAnalysisResult, DataCleanupFilter, DataCleanupPreview, DataCleanupResult,
+  LibraryCounts, MagicSearchDocument, MagicSearchListItem, MagicSearchPreview, MagicSearchRequest,
+  SaveSmartContextRuleResult, Settings, SmartContextRule, SmartContextRulePreview, TagDocument,
 } from "../types";
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -38,6 +39,10 @@ export const applyContextSuggestions = (suggestions: ApplyContextSuggestion[]) =
 export const createContext = (name: string) => invoke<Context>("create_context", { name });
 export const renameContext = (id: string, name: string) => invoke<Context>("rename_context", { id, name });
 export const deleteContext = (id: string) => invoke<void>("delete_context", { id });
+export const listContextRules = (contextId: string) => invoke<SmartContextRule[]>("list_context_rules", { contextId });
+export const previewContextRule = (rule: SmartContextRule) => invoke<SmartContextRulePreview>("preview_context_rule", { rule });
+export const saveContextRule = (rule: SmartContextRule, applyToExisting: boolean) => invoke<SaveSmartContextRuleResult>("save_context_rule", { rule, applyToExisting });
+export const deleteContextRule = (ruleId: string) => invoke<void>("delete_context_rule", { ruleId });
 export const addCaptureContexts = (captureId: string, contextIds: string[]) => invoke<void>("add_capture_contexts", { captureId, contextIds });
 export const addCapturesToContext = (captureIds: string[], contextId: string) => invoke<number>("add_captures_to_context", { captureIds, contextId });
 export const removeCaptureContext = (captureId: string, contextId: string) => invoke<void>("remove_capture_context", { captureId, contextId });
@@ -49,6 +54,8 @@ export const saveSettings = (settings: Settings) => invoke<Settings>("update_set
 export const askChat = (request: ChatRequest) => invoke<ChatAnswer>("ask_chat", { request });
 export const clearAiApiKey = () => invoke<Settings>("clear_ai_api_key");
 export const deleteAllData = () => invoke<void>("delete_all_data");
+export const previewDataCleanup = (filter: DataCleanupFilter) => invoke<DataCleanupPreview>("preview_data_cleanup", { filter });
+export const deleteDataByFilter = (filter: DataCleanupFilter, selectionToken: string) => invoke<DataCleanupResult>("delete_data_by_filter", { filter, selectionToken });
 export const listPasteItems = (search: string, page: number, pageSize = 10) => invoke<CapturePage>("list_paste_page", {
   search: search.trim() || null,
   limit: pageSize,
