@@ -88,12 +88,18 @@ export function LiteSettingsDialog({ settings, aiOptions, language, updater, sav
             <div className="settings-control-stack magic-engine-control-stack">
               <div className="magic-engine-options" role="radiogroup" aria-label={tr("Magic Search")}>
                 <button type="button" role="radio" aria-checked={settings.magic_search_engine === "local"} className={`magic-engine-card ${settings.magic_search_engine === "local" ? "is-selected" : ""}`} onClick={() => void onPatch({ magic_search_engine: "local" })}>
-                  <span className="magic-engine-card-title"><LiteIcon name="lock" /><strong>{tr("Local beta")}</strong><span>{tr("Beta")}</span></span>
-                  <small>{tr("Multilingual semantic search and local answers. Captures never leave this computer.")}</small>
+                  <span className="settings-radio-indicator" aria-hidden="true"><span /></span>
+                  <span className="magic-engine-card-copy">
+                    <span className="magic-engine-card-title"><LiteIcon name="lock" /><strong>{tr("Local beta")}</strong><span>{tr("Beta")}</span></span>
+                    <small>{tr("Multilingual semantic search and local answers. Captures never leave this computer.")}</small>
+                  </span>
                 </button>
                 <button type="button" role="radio" aria-checked={settings.magic_search_engine === "provider"} className={`magic-engine-card ${settings.magic_search_engine === "provider" ? "is-selected" : ""}`} onClick={() => void onPatch({ magic_search_engine: "provider" })}>
-                  <span className="magic-engine-card-title"><LiteIcon name="sparkles" /><strong>{tr("AI provider")}</strong></span>
-                  <small>{tr("Searches your local evidence, then may send selected evidence to the configured provider.")}</small>
+                  <span className="settings-radio-indicator" aria-hidden="true"><span /></span>
+                  <span className="magic-engine-card-copy">
+                    <span className="magic-engine-card-title"><LiteIcon name="sparkles" /><strong>{tr("AI provider")}</strong></span>
+                    <small>{tr("Searches your local evidence, then may send selected evidence to the configured provider.")}</small>
+                  </span>
                 </button>
               </div>
               {settings.magic_search_engine === "local" && <>

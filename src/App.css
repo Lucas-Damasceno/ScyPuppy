@@ -2519,9 +2519,11 @@ kbd {
 
 .magic-engine-card {
   display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
   min-width: 0;
   min-height: 62px;
-  gap: 3px;
+  gap: 9px;
   padding: 8px 12px;
   border: 0;
   border-radius: 0;
@@ -2543,13 +2545,18 @@ kbd {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+.settings-radio-indicator { display: grid; width: 14px; height: 14px; place-items: center; border: 1px solid var(--settings-control-border, var(--line)); border-radius: 50%; background: var(--settings-section-surface, var(--card-solid)); transition: border-color 120ms ease, box-shadow 120ms ease; }
+.settings-radio-indicator > span { width: 6px; height: 6px; border-radius: 50%; background: transparent; transform: scale(.45); transition: background 120ms ease, transform 120ms ease; }
+.magic-engine-card.is-selected .settings-radio-indicator { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent); }
+.magic-engine-card.is-selected .settings-radio-indicator > span { background: var(--accent); transform: scale(1); }
+.magic-engine-card-copy { display: grid; min-width: 0; gap: 3px; }
 .magic-engine-card-title { display: flex; min-width: 0; align-items: center; gap: 6px; color: var(--text-secondary); }
 .magic-engine-card-title > svg { color: var(--text-tertiary); }
 .magic-engine-card.is-selected .magic-engine-card-title,
 .magic-engine-card.is-selected .magic-engine-card-title > svg { color: var(--accent-strong); }
 .magic-engine-card-title strong { font-size: 10px; font-weight: 650; }
 .magic-engine-card-title > span { margin-left: auto; padding: 1px 5px; border-radius: 999px; color: var(--accent-strong); background: var(--accent-soft); font-size: 7px; font-weight: 700; letter-spacing: .055em; text-transform: uppercase; }
-.magic-engine-card > small { color: inherit; font-size: 9px; font-weight: 400; line-height: 1.35; }
+.magic-engine-card-copy > small { color: inherit; font-size: 9px; font-weight: 400; line-height: 1.35; }
 .local-model-status { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; min-height: var(--settings-row-min-height, 42px); gap: 12px; padding: var(--settings-row-padding, 7px 12px); background: var(--settings-section-surface, var(--card-solid)); }
 .local-model-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
 .local-model-actions .settings-inline-button { display: inline-flex; align-items: center; gap: 5px; }

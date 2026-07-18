@@ -3,10 +3,10 @@ import * as api from "../../api/tauri";
 import { formatAppError, formatAppMessage } from "../../appMessages";
 import { BrandMark } from "../../components/BrandMark";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
-import { normalizeLanguage, translate, type AppLanguage } from "../../i18n";
+import { normalizeLanguage, translate, translateLegacyGeneratedContent, type AppLanguage } from "../../i18n";
 import type { Capture, Context, LocalSearchStatus, MagicSearchDocument, MagicSearchPreview, Settings } from "../../types";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
-import { cleanMagicAnswer, maskSensitive } from "./formatters";
+import { cleanMagicAnswer, formatRelativeDate, maskSensitive } from "./formatters";
 import { LiteEmpty } from "./LiteEmpty";
 import { LiteIcon } from "./LiteIcon";
 
@@ -163,9 +163,7 @@ export function LiteMagicPalette() {
     : document?.sensitive_value ?? answer;
   const copyAnswer = document?.sensitive_value ?? answer;
 
-  async function openEvidence() {
-    const captureId = document?.evidence[0]?.capture_id;
-    if (!captureId) return;
+  async function openEvidence(captureId: string) {
     try {
       setDetail(await api.getCapture(captureId));
     } catch (reason) {
@@ -270,8 +268,25 @@ export function LiteMagicPalette() {
               <div className="lite-direct-actions">
                 {document.sensitive_value && <button onClick={() => setRevealed((value) => !value)}><LiteIcon name="eye" />{tr(revealed ? "Hide" : "Reveal")}</button>}
                 <button className="is-primary" onClick={() => api.copyTextToClipboard(copyAnswer).catch((reason) => setError(formatAppError(reason, tr)))}><LiteIcon name="copy" />{tr("Copy")}</button>
-                <button onClick={() => void openEvidence()}><LiteIcon name="info" />{tr("View source")}</button>
               </div>
+              <section className="lite-direct-sources" aria-labelledby="lite-direct-sources-title">
+                <div className="lite-direct-sources-title">
+                  <span id="lite-direct-sources-title">{tr("Evidence used")}</span>
+                  <small>{Math.min(document.evidence.length, 5)}</small>
+                </div>
+                <div className="lite-document-source-list">
+                  {document.evidence.slice(0, 5).map((source, index) => <div className="lite-document-source-item" key={source.capture_id}>
+                    <button className="lite-document-source-open" onClick={() => void openEvidence(source.capture_id)}>
+                      <span>{index + 1}</span>
+                      <div>
+                        <strong>{source.app_name || tr("Unknown application")}</strong>
+                        <small>{source.window_title || formatRelativeDate(source.captured_at, language)}</small>
+                        <p>{translateLegacyGeneratedContent(language, source.excerpt)}</p>
+                      </div>
+                    </button>
+                  </div>)}
+                </div>
+              </section>
             </div>
           ) : mode === "document" ? (
             <LiteEmpty icon="file" title={tr("Turn your captures into a useful document")} description={tr("Describe a subject and ScryPuppy will organize the related information with numbered sources.")} />
