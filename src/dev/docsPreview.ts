@@ -1,7 +1,7 @@
 import { createDefaultSettings } from "../config/defaultSettings";
 import type {
   Capture, Context, ContextAssignment, DataCleanupFilter, MagicSearchDocument, MagicSearchListItem,
-  Settings, SmartContextRule,
+  LocalSearchStatus, Settings, SmartContextRule,
 } from "../types";
 
 const previewKey = "docs-preview";
@@ -173,6 +173,20 @@ let settings: Settings = createDefaultSettings({
   data_dir: "C:\\Users\\You\\AppData\\Roaming\\com.scryppy.desktop",
 });
 
+const localSearchStatus: LocalSearchStatus = {
+  phase: "ready",
+  model_id: "intfloat/multilingual-e5-small",
+  model_name: "Multilingual E5 Small",
+  cache_bytes: 487_587_840,
+  indexed_count: 24,
+  total_count: 24,
+  pending_count: 0,
+  error: null,
+  can_download: false,
+  can_retry: false,
+  can_remove: true,
+};
+
 function filterCaptures(args: unknown): Capture[] {
   const filter = (args as { filter?: { context_id?: string | null; search?: string | null } } | undefined)?.filter;
   const query = filter?.search?.trim().toLowerCase() ?? "";
@@ -262,6 +276,7 @@ export function installDocsPreview(): void {
         return captures.find((item) => item.id === id) ?? null;
       }
       if (command === "get_settings") return settings;
+      if (command === "get_local_search_status") return localSearchStatus;
       if (command === "update_settings") {
         settings = { ...settings, ...((args as { settings?: Partial<Settings> } | undefined)?.settings ?? {}) };
         return settings;
