@@ -43,6 +43,8 @@ npm run build:windows
 
 Do not substitute a plain `cargo build --release` when creating an installer.
 
+The supported installer intentionally excludes `intfloat/multilingual-e5-small`. The build script fails if a FastEmbed cache, `model.onnx`, `tokenizer.json`, or `installed.json` appears in frontend or NSIS staging. Users download the optional model at runtime from Settings; therefore the 12-second startup probe must remain offline and must never initiate the first model download.
+
 ## Version consistency
 
 The release version must match in:

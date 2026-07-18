@@ -3,7 +3,7 @@ import { normalizeCommandError } from "../appMessages";
 import type {
   AiProviderOption, ApplyContextSuggestion, ApplyContextSuggestionsResult, Capture, CaptureFilter, CapturePage, Category,
   ChatAnswer, ChatRequest, Context, ContextAnalysisResult, DataCleanupFilter, DataCleanupPreview, DataCleanupResult,
-  LibraryCounts, MagicSearchDocument, MagicSearchListItem, MagicSearchPreview, MagicSearchRequest,
+  LibraryCounts, LocalSearchStatus, MagicSearchDocument, MagicSearchListItem, MagicSearchPreview, MagicSearchRequest,
   SaveSmartContextRuleResult, Settings, SmartContextRule, SmartContextRulePreview, TagDocument,
 } from "../types";
 
@@ -31,6 +31,9 @@ export const listCaptures = (filter: CaptureFilter) => invoke<Capture[]>("list_c
 export const listCapturePage = (filter: CaptureFilter) => invoke<CapturePage>("list_capture_page", { filter });
 export const getSettings = () => invoke<Settings>("get_settings");
 export const getAiProviderOptions = () => invoke<AiProviderOption[]>("get_ai_provider_options");
+export const getLocalSearchStatus = () => invoke<LocalSearchStatus>("get_local_search_status");
+export const prepareLocalSearch = () => invoke<LocalSearchStatus>("prepare_local_search");
+export const removeLocalSearchModel = () => invoke<LocalSearchStatus>("remove_local_search_model");
 export const runCapture = () => invoke<Capture>("run_capture");
 export const copyTextToClipboard = (text: string) => invoke<void>("copy_text_to_clipboard", { text });
 export const copyCaptureToClipboard = (id: string) => invoke<void>("copy_capture_to_clipboard", { id });

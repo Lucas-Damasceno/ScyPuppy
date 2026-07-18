@@ -12,7 +12,7 @@ Capture useful information, keep its source, organize it into Contexts, and turn
 [![React](https://img.shields.io/badge/React-19-149ECA?logo=react&logoColor=white)](https://react.dev/)
 [![Platform](https://img.shields.io/badge/Platform-Windows-0078D4?logo=windows&logoColor=white)](#install)
 
-[Download](https://github.com/Lucas-Damasceno/ScryPuppy/releases) · [Build from source](#build-from-source) · [Architecture](ARCHITECTURE.md) · [UI reference](prints.md)
+[Download](https://github.com/Lucas-Damasceno/ScryPuppy/releases) · [Build from source](#build-from-source) · [Architecture](ARCHITECTURE.md) · [UI reference](prints.md) · [Donate](#support-the-project)
 
 </div>
 
@@ -50,15 +50,17 @@ The Context picker searches only the local encrypted library. It supports filter
 
 ### Ask a focused question or create a document
 
-Quick answers and document creation are separate modes. Document mode adds Context, time period, and evidence preview controls before generation.
+Quick answers and document creation are separate modes. Quick answers expose up to five ranked captures so every source can be inspected independently. Document mode adds Context, time period, and evidence preview controls before generation.
 
 ![Ask ScryPuppy document mode](docs/screenshots/scrypuppy-ask-document.png)
 
-### Configure one consistent settings model
+### Choose Local beta or an AI provider
 
-Settings and onboarding share the same controls for language, AI, clipboard behavior, Quick Context, startup, shortcuts, and local-data management.
+Magic Search can run entirely on-device with the optional **Multilingual E5 Small** model, or use the configured AI provider after local evidence retrieval. The radio selector makes the active engine explicit.
 
-![ScryPuppy Settings](docs/screenshots/scrypuppy-settings.png)
+The main installer does not include the model. Local beta becomes available only after the user starts the runtime download in Settings and the first library index finishes. Failed downloads can be retried later, and provider mode remains available throughout.
+
+![Magic Search Local beta settings](docs/screenshots/scrypuppy-settings.png)
 
 See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 
@@ -74,6 +76,8 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 - Smart Context automations route new captures locally by application, content type, text or OCR, file extension, file path, and window title.
 - Selective cleanup previews and permanently removes captures by content type, period, and Context without deleting settings, documents, or credentials.
 - Unified Local Search and Magic Search entry point.
+- Optional local Magic Search beta combines SQLite FTS5 and Multilingual E5 Small rankings with reciprocal-rank fusion.
+- Quick answers keep up to five ranked evidence items one click away.
 - Quick Paste history available from any application.
 - Editable, versioned Markdown documents with durable evidence snapshots.
 - SQLCipher database encryption and Windows Credential Manager integration.
@@ -89,6 +93,8 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 - Images and screenshots are never sent to AI providers.
 - File bytes, executable contents, complete filesystem paths, and private clipboard formats are never sent to AI providers.
 - Explicit AI requests may include bounded text evidence and relevant locally extracted OCR text. Recognized API keys and tokens are replaced with opaque placeholders before every provider request.
+- Magic Search can instead run entirely locally with Multilingual E5 Small. Selecting local mode does not start a download; the user must explicitly download the model in Settings and wait for the first library index to finish.
+- The main installer does not contain the embedding model. A failed runtime download leaves Local Magic Search unavailable and can be retried later; provider mode remains available.
 - For generated documents, placeholders are restored only after the provider response returns, on the user's device. Local documents and exported Markdown files may therefore contain the original credentials and should be handled carefully.
 - Automatic screenshots and automatic Quick Context prompts remain separate opt-ins.
 
@@ -152,11 +158,14 @@ src-tauri/target/release/bundle/nsis/
 | Frontend | React 19, TypeScript, Vite |
 | Native backend | Rust |
 | Local database | SQLite with bundled SQLCipher |
+| Local semantic retrieval | FastEmbed, Multilingual E5 Small, SQLite FTS5, brute-force cosine search, RRF |
 | Export encryption | AES-256-GCM |
 | Credentials | Windows Credential Manager |
 | Clipboard and input | `arboard`, `enigo` |
 | Window capture | `xcap` |
 | OCR | Windows Media OCR APIs |
+
+Third-party runtime components and licenses are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md) for command boundaries, windows, persistence, capture sequencing, and security decisions.
 

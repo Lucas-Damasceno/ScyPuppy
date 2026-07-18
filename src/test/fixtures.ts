@@ -12,6 +12,7 @@ export const settingsFixture: Settings = {
   ai_model: "deepseek-v4-flash",
   ai_api_key: "",
   ai_api_key_configured: false,
+  magic_search_engine: "provider",
   clipboard_monitor_enabled: false,
   clipboard_monitor_capture_screenshots: false,
   clipboard_monitor_quick_context_enabled: false,

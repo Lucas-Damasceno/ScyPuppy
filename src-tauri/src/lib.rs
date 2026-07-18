@@ -38,6 +38,7 @@ mod app_error;
 mod clipboard;
 mod clipboard_monitor;
 mod crypto;
+mod local_search;
 use ai::ProviderOption as AiProviderOption;
 use app_error::{command_result, AppError, AppNotice, CommandResult};
 use clipboard::{
@@ -46,6 +47,10 @@ use clipboard::{
 };
 use clipboard_monitor::ClipboardMonitorHandle;
 use crypto::{encrypt_context_file, sha256_hex};
+use local_search::{
+    cosine_similarity, decode_embedding, encode_embedding, normalize_embedding, LocalSearchManager,
+    LocalSearchPhase, LocalSearchStatus, INDEX_VERSION, MODEL_DIMENSIONS, MODEL_ID,
+};
 
 #[cfg(target_os = "windows")]
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
@@ -87,6 +92,17 @@ fn default_clipboard_monitor_capture_screenshots() -> bool {
 fn default_clipboard_monitor_quick_context_enabled() -> bool {
     false
 }
+fn default_magic_search_engine() -> String {
+    "provider".into()
+}
+
+fn initial_magic_search_engine(new_install: bool) -> &'static str {
+    if new_install {
+        "local"
+    } else {
+        "provider"
+    }
+}
 
 #[derive(Clone)]
 struct AppState {
@@ -100,6 +116,7 @@ struct AppState {
     clipboard_monitor: Arc<ClipboardMonitorHandle>,
     ocr_worker_running: Arc<Mutex<bool>>,
     paste_target_window: Arc<Mutex<Option<isize>>>,
+    local_search: Arc<LocalSearchManager>,
 }
 
 struct CaptureGate {
@@ -339,6 +356,8 @@ struct SettingsDto {
     ai_model: String,
     ai_api_key: String,
     ai_api_key_configured: bool,
+    #[serde(default = "default_magic_search_engine")]
+    magic_search_engine: String,
     #[serde(default = "default_quick_context_enabled")]
     quick_context_enabled: bool,
     #[serde(default = "default_quick_context_after_reference")]
@@ -401,6 +420,8 @@ struct MagicSearchDocumentDto {
     markdown: String,
     provider: String,
     model: String,
+    retrieval_engine: String,
+    retrieval_model: Option<String>,
     filters: MagicSearchRequest,
     generation_warning: Option<AppNotice>,
     evidence_count: i64,
@@ -420,6 +441,8 @@ struct MagicSearchListItemDto {
     query: String,
     provider: String,
     model: String,
+    retrieval_engine: String,
+    retrieval_model: Option<String>,
     evidence_count: i64,
     created_at: String,
     response_mode: String,
@@ -470,7 +493,7 @@ struct SuggestedAction {
 
 struct ScoredCapture {
     capture: CaptureDto,
-    score: i32,
+    score: f64,
     matched_fields: Vec<String>,
 }
 
@@ -1333,7 +1356,12 @@ fn create_context(state: State<AppState>, name: String) -> CommandResult<Context
 }
 
 #[tauri::command]
-fn rename_context(state: State<AppState>, id: String, name: String) -> CommandResult<ContextDto> {
+fn rename_context(
+    app: AppHandle,
+    state: State<AppState>,
+    id: String,
+    name: String,
+) -> CommandResult<ContextDto> {
     if id == INBOX_CONTEXT_ID || id == CONTENT_BASE_CONTEXT_ID {
         return Err(AppError::new("context.protected_rename"));
     }
@@ -1346,6 +1374,7 @@ fn rename_context(state: State<AppState>, id: String, name: String) -> CommandRe
             row.get(0)
         })
         .map_err(err)?;
+    let affected_capture_ids = capture_ids_assigned_to_context(&conn, &id)?;
     let now = now();
     let slug = unique_slug(&conn, &slugify(&name), Some(&id))?;
 
@@ -1359,6 +1388,7 @@ fn rename_context(state: State<AppState>, id: String, name: String) -> CommandRe
     transaction.commit().map_err(err)?;
     remove_context_export_best_effort(&state, &old_slug);
     sync_contexts_best_effort(&state, std::slice::from_ref(&id));
+    refresh_search_indexes_best_effort(&app, &state, &affected_capture_ids);
 
     list_contexts(state)?
         .into_iter()
@@ -1367,7 +1397,7 @@ fn rename_context(state: State<AppState>, id: String, name: String) -> CommandRe
 }
 
 #[tauri::command]
-fn delete_context(state: State<AppState>, id: String) -> CommandResult<()> {
+fn delete_context(app: AppHandle, state: State<AppState>, id: String) -> CommandResult<()> {
     if id == INBOX_CONTEXT_ID || id == CONTENT_BASE_CONTEXT_ID {
         return Err(AppError::new("context.protected_delete"));
     }
@@ -1378,13 +1408,30 @@ fn delete_context(state: State<AppState>, id: String) -> CommandResult<()> {
             row.get(0)
         })
         .map_err(err)?;
+    let affected_capture_ids = capture_ids_assigned_to_context(&conn, &id)?;
     let transaction = conn.transaction().map_err(err)?;
     transaction
         .execute("DELETE FROM contexts WHERE id = ?", [&id])
         .map_err(err)?;
     transaction.commit().map_err(err)?;
     remove_context_export_best_effort(&state, &old_slug);
+    refresh_search_indexes_best_effort(&app, &state, &affected_capture_ids);
     Ok(())
+}
+
+fn capture_ids_assigned_to_context(
+    conn: &Connection,
+    context_id: &str,
+) -> Result<Vec<String>, String> {
+    let mut stmt = conn
+        .prepare("SELECT capture_id FROM capture_contexts WHERE context_id = ? ORDER BY capture_id")
+        .map_err(err)?;
+    let ids = stmt
+        .query_map([context_id], |row| row.get::<_, String>(0))
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    Ok(ids)
 }
 
 fn validate_smart_context_rule(rule: &SmartContextRuleDto) -> CommandResult<()> {
@@ -1829,6 +1876,11 @@ async fn save_context_rule(
         sync_contexts_best_effort(&state, std::slice::from_ref(&context_id));
         app.emit("capture-contexts-updated", &context_id)
             .map_err(err)?;
+        if let Ok(conn) = open_conn(&state) {
+            if let Ok(capture_ids) = capture_ids_assigned_to_context(&conn, &context_id) {
+                refresh_search_indexes_best_effort(&app, &state, &capture_ids);
+            }
+        }
     }
     Ok(SaveSmartContextRuleResult {
         rule: saved,
@@ -1919,6 +1971,7 @@ fn add_capture_contexts(
     sync_contexts_best_effort(&state, &context_ids);
     app.emit("capture-contexts-updated", &capture_id)
         .map_err(err)?;
+    refresh_search_index_best_effort(&app, &state, &capture_id);
     Ok(())
 }
 
@@ -1955,6 +2008,7 @@ fn add_captures_to_context(
     sync_contexts_best_effort(&state, std::slice::from_ref(&context_id));
     app.emit("capture-contexts-updated", &context_id)
         .map_err(err)?;
+    refresh_search_indexes_best_effort(&app, &state, &capture_ids);
     Ok(added_count)
 }
 
@@ -1975,6 +2029,7 @@ fn remove_capture_context(
     sync_contexts_best_effort(&state, &[context_id]);
     app.emit("capture-contexts-updated", &capture_id)
         .map_err(err)?;
+    refresh_search_index_best_effort(&app, &state, &capture_id);
     Ok(())
 }
 
@@ -2103,6 +2158,15 @@ fn update_settings(
     set_setting(&conn, "ai_model", &settings.ai_model)?;
     set_setting(
         &conn,
+        "magic_search_engine",
+        if settings.magic_search_engine == "local" {
+            "local"
+        } else {
+            "provider"
+        },
+    )?;
+    set_setting(
+        &conn,
         "quick_context_enabled",
         if settings.quick_context_enabled {
             "true"
@@ -2204,6 +2268,120 @@ fn get_ai_provider_options() -> Vec<AiProviderOption> {
     ai_provider_options()
 }
 
+fn local_search_status_from_db(state: &AppState) -> Result<LocalSearchStatus, String> {
+    let conn = open_conn(state)?;
+    let total = conn
+        .query_row("SELECT count(*) FROM captures", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .map_err(err)? as usize;
+    let indexed = conn
+        .query_row(
+            "SELECT count(*)
+             FROM capture_embeddings e
+             JOIN capture_search_documents d ON d.capture_id = e.capture_id
+               AND d.content_hash = e.content_hash
+             WHERE e.model_id = ? AND e.index_version = ? AND e.dimensions = ?",
+            params![MODEL_ID, INDEX_VERSION, MODEL_DIMENSIONS as i64],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(err)? as usize;
+    state.local_search.set_index_progress(indexed, total);
+    Ok(state.local_search.status())
+}
+
+#[tauri::command]
+fn get_local_search_status(state: State<AppState>) -> CommandResult<LocalSearchStatus> {
+    command_result(local_search_status_from_db(&state))
+}
+
+#[tauri::command]
+fn prepare_local_search(
+    app: AppHandle,
+    state: State<AppState>,
+) -> CommandResult<LocalSearchStatus> {
+    if !state.local_search.try_begin_operation() {
+        return Err(AppError::new("local_search.busy"));
+    }
+    let state = state.inner().clone();
+    let was_installed = state.local_search.installed();
+    state.local_search.set_phase(
+        if was_installed {
+            LocalSearchPhase::Indexing
+        } else {
+            LocalSearchPhase::Downloading
+        },
+        None,
+    );
+    let initial = local_search_status_from_db(&state).map_err(AppError::from)?;
+    let _ = app.emit("local-search-status-changed", initial.clone());
+    thread::spawn(move || {
+        let result = (|| -> Result<(), (String, &'static str)> {
+            state.local_search.load_model(true).map_err(|error| {
+                (
+                    error,
+                    if was_installed {
+                        "local_search.load_failed"
+                    } else {
+                        "local_search.download_failed"
+                    },
+                )
+            })?;
+            if !was_installed {
+                state
+                    .local_search
+                    .mark_installed()
+                    .map_err(|error| (error, "local_search.download_failed"))?;
+            }
+            state
+                .local_search
+                .set_phase(LocalSearchPhase::Indexing, None);
+            let _ = app.emit("local-search-status-changed", state.local_search.status());
+            index_local_embeddings(&app, &state)
+                .map_err(|error| (error, "local_search.index_failed"))?;
+            state.local_search.set_phase(LocalSearchPhase::Ready, None);
+            Ok(())
+        })();
+        if let Err((error, code)) = result {
+            eprintln!("Local search preparation failed [{code}]: {error}");
+            state
+                .local_search
+                .set_phase(LocalSearchPhase::Error, Some(AppNotice::new(code)));
+        }
+        state.local_search.finish_operation();
+        let _ = app.emit("local-search-status-changed", state.local_search.status());
+    });
+    Ok(initial)
+}
+
+#[tauri::command]
+fn remove_local_search_model(
+    app: AppHandle,
+    state: State<AppState>,
+) -> CommandResult<LocalSearchStatus> {
+    if !state.local_search.try_begin_operation() {
+        return Err(AppError::new("local_search.busy"));
+    }
+    let state = state.inner().clone();
+    state
+        .local_search
+        .set_phase(LocalSearchPhase::Removing, None);
+    let initial = state.local_search.status();
+    let _ = app.emit("local-search-status-changed", initial.clone());
+    thread::spawn(move || {
+        if let Err(error) = state.local_search.remove_model() {
+            eprintln!("Local model removal failed: {error}");
+            state.local_search.set_phase(
+                LocalSearchPhase::Error,
+                Some(AppNotice::new("local_search.remove_failed")),
+            );
+        }
+        state.local_search.finish_operation();
+        let _ = app.emit("local-search-status-changed", state.local_search.status());
+    });
+    Ok(initial)
+}
+
 #[tauri::command]
 async fn ask_chat(state: State<'_, AppState>, request: ChatRequest) -> CommandResult<ChatAnswer> {
     let state = state.inner().clone();
@@ -2255,14 +2433,12 @@ async fn preview_magic_search(
     request: MagicSearchRequest,
 ) -> CommandResult<MagicSearchPreviewDto> {
     let state = state.inner().clone();
-    command_result(
-        tauri::async_runtime::spawn_blocking(move || {
-            let conn = open_conn(&state)?;
-            preview_magic_search_document(&conn, request)
-        })
-        .await
-        .map_err(err)?,
-    )
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_conn(&state)?;
+        preview_magic_search_document(&conn, &state, request)
+    })
+    .await
+    .map_err(|error| AppError::from(err(error)))?
 }
 
 #[tauri::command]
@@ -3062,6 +3238,7 @@ fn persist_clipboard_payload(
 
     let context_ids = context_ids_for_capture(&conn, &capture_id).unwrap_or_default();
     sync_contexts_best_effort(&state, &context_ids);
+    refresh_search_index_best_effort(app, &state, &capture_id);
 
     Ok(capture)
 }
@@ -3549,13 +3726,13 @@ fn answer_chat_locally(
     let intent = detect_chat_intent(query);
     let captures = load_chat_captures(conn, &request)?;
     let mut scored = score_captures_for_query(query, captures, &intent);
-    scored.sort_by_key(|capture| std::cmp::Reverse(capture.score));
+    scored.sort_by(|left, right| right.score.total_cmp(&left.score));
 
     let limit = request.limit.unwrap_or(6).clamp(1, 12);
     let relevant: Vec<ScoredCapture> = scored
         .into_iter()
         .filter(|item| {
-            item.score > 0
+            item.score > 0.0
                 || matches!(
                     intent,
                     ChatIntent::OrganizeToday | ChatIntent::SummarizeContext
@@ -3677,7 +3854,7 @@ fn score_captures_for_query(
     captures
         .into_iter()
         .map(|capture| {
-            let mut score = 0;
+            let mut score = 0.0;
             let mut matched_fields = Vec::new();
 
             let content = normalize_text(&capture.content_text);
@@ -3704,35 +3881,35 @@ fn score_captures_for_query(
 
             for term in &terms {
                 if content.contains(term) {
-                    score += 3;
+                    score += 3.0;
                     push_field(&mut matched_fields, "texto");
                 }
                 if app.contains(term) {
-                    score += 5;
+                    score += 5.0;
                     push_field(&mut matched_fields, "app");
                 }
                 if app_id.contains(term) {
-                    score += 4;
+                    score += 4.0;
                     push_field(&mut matched_fields, "application_id");
                 }
                 if window.contains(term) {
-                    score += 3;
+                    score += 3.0;
                     push_field(&mut matched_fields, "janela");
                 }
                 if contexts.contains(term) {
-                    score += 3;
+                    score += 3.0;
                     push_field(&mut matched_fields, "contexto");
                 }
                 if tags.contains(term) {
-                    score += 2;
+                    score += 2.0;
                     push_field(&mut matched_fields, "tags");
                 }
                 if entities.contains(term) {
-                    score += 4;
+                    score += 4.0;
                     push_field(&mut matched_fields, "entidades");
                 }
                 if ocr.contains(term) {
-                    score += 4;
+                    score += 4.0;
                     push_field(&mut matched_fields, "ocr");
                 }
             }
@@ -3740,19 +3917,19 @@ fn score_captures_for_query(
             match intent {
                 ChatIntent::ApplicationId => {
                     if capture.source_app_id.is_some() {
-                        score += 2;
+                        score += 2.0;
                         push_field(&mut matched_fields, "application_id");
                     }
                 }
                 ChatIntent::WhereError => {
                     if capture.tags.iter().any(|tag| tag == "erro") {
-                        score += 5;
+                        score += 5.0;
                         push_field(&mut matched_fields, "tags");
                     }
                 }
                 ChatIntent::OrganizeToday => {
                     if capture_date_is(&capture.captured_at, today) {
-                        score += 5;
+                        score += 5.0;
                         push_field(&mut matched_fields, "data");
                     }
                 }
@@ -4304,6 +4481,442 @@ fn render_tag_document_markdown(
     markdown
 }
 
+struct CanonicalSearchDocument {
+    content: String,
+    ocr: String,
+    metadata: String,
+    content_hash: String,
+}
+
+fn bounded_search_text(value: &str) -> String {
+    value.chars().take(32_000).collect()
+}
+
+fn canonical_search_document(capture: &CaptureDto) -> CanonicalSearchDocument {
+    let mut seen = HashSet::new();
+    let mut content_parts = Vec::new();
+    for value in std::iter::once(Some(capture.content_text.as_str())).chain(
+        capture
+            .representations
+            .iter()
+            .map(|representation| representation.text_content.as_deref()),
+    ) {
+        let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+            continue;
+        };
+        if seen.insert(value.to_string()) {
+            content_parts.push(value);
+        }
+    }
+    let content = bounded_search_text(&content_parts.join("\n"));
+    let ocr = bounded_search_text(
+        capture
+            .ocr
+            .as_ref()
+            .and_then(|value| value.text.as_deref())
+            .unwrap_or_default(),
+    );
+    let metadata = bounded_search_text(
+        &[
+            capture
+                .source_app_name
+                .as_deref()
+                .unwrap_or_default()
+                .to_string(),
+            capture
+                .source_app_id
+                .as_deref()
+                .unwrap_or_default()
+                .to_string(),
+            capture
+                .window_title
+                .as_deref()
+                .unwrap_or_default()
+                .to_string(),
+            context_names(capture).join(" "),
+            capture.tags.join(" "),
+            capture
+                .entities
+                .iter()
+                .map(|entity| format!("{} {}", entity.kind, entity.value))
+                .collect::<Vec<_>>()
+                .join(" "),
+            capture
+                .files
+                .iter()
+                .map(|file| {
+                    format!(
+                        "{} {} {}",
+                        file.display_name,
+                        file.extension.as_deref().unwrap_or_default(),
+                        file.original_path.as_deref().unwrap_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" "),
+        ]
+        .join("\n"),
+    );
+    let content_hash = sha256_hex(format!("{content}\0{ocr}\0{metadata}").as_bytes());
+    CanonicalSearchDocument {
+        content,
+        ocr,
+        metadata,
+        content_hash,
+    }
+}
+
+fn refresh_search_document(conn: &Connection, capture_id: &str) -> Result<(), String> {
+    let exists = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM captures WHERE id = ?)",
+            [capture_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(err)?
+        != 0;
+    if !exists {
+        conn.execute(
+            "DELETE FROM capture_search_documents WHERE capture_id = ?",
+            [capture_id],
+        )
+        .map_err(err)?;
+        return Ok(());
+    }
+    let capture = get_capture_by_id(conn, capture_id)?;
+    let document = canonical_search_document(&capture);
+    conn.execute(
+        "INSERT INTO capture_search_documents
+         (capture_id, content, ocr, metadata, content_hash, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(capture_id) DO UPDATE SET
+            content = excluded.content,
+            ocr = excluded.ocr,
+            metadata = excluded.metadata,
+            content_hash = excluded.content_hash,
+            updated_at = excluded.updated_at",
+        params![
+            capture_id,
+            document.content,
+            document.ocr,
+            document.metadata,
+            document.content_hash,
+            now()
+        ],
+    )
+    .map_err(err)?;
+    conn.execute(
+        "DELETE FROM capture_embeddings
+         WHERE capture_id = ? AND content_hash <> (
+            SELECT content_hash FROM capture_search_documents WHERE capture_id = ?
+         )",
+        params![capture_id, capture_id],
+    )
+    .map_err(err)?;
+    Ok(())
+}
+
+fn reconcile_search_documents(conn: &Connection) -> Result<usize, String> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM captures ORDER BY captured_at ASC")
+        .map_err(err)?;
+    let ids = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    drop(stmt);
+    for capture_id in &ids {
+        refresh_search_document(conn, capture_id)?;
+    }
+    conn.execute(
+        "DELETE FROM capture_search_documents
+         WHERE NOT EXISTS (SELECT 1 FROM captures WHERE captures.id = capture_search_documents.capture_id)",
+        [],
+    )
+    .map_err(err)?;
+    Ok(ids.len())
+}
+
+fn index_local_embeddings(app: &AppHandle, state: &AppState) -> Result<(), String> {
+    let mut conn = open_conn(state)?;
+    let total = reconcile_search_documents(&conn)?;
+    let mut stmt = conn
+        .prepare(
+            "SELECT d.capture_id, trim(d.content || '\n' || d.ocr || '\n' || d.metadata), d.content_hash
+             FROM capture_search_documents d
+             LEFT JOIN capture_embeddings e ON e.capture_id = d.capture_id
+               AND e.model_id = ? AND e.index_version = ? AND e.dimensions = ?
+               AND e.content_hash = d.content_hash
+             WHERE e.capture_id IS NULL
+             ORDER BY d.id ASC",
+        )
+        .map_err(err)?;
+    let pending = stmt
+        .query_map(
+            params![MODEL_ID, INDEX_VERSION, MODEL_DIMENSIONS as i64],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            },
+        )
+        .map_err(err)?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(err)?;
+    drop(stmt);
+    let mut indexed = total.saturating_sub(pending.len());
+    state.local_search.set_index_progress(indexed, total);
+    let _ = app.emit("local-search-status-changed", state.local_search.status());
+
+    for batch in pending.chunks(32) {
+        if state.local_search.cancel_requested() {
+            return Err("local indexing was cancelled".into());
+        }
+        let embeddings = state.local_search.embed_passages(
+            batch
+                .iter()
+                .map(|(_, passage, _)| passage.clone())
+                .collect(),
+        )?;
+        let transaction = conn.transaction().map_err(err)?;
+        for ((capture_id, _, content_hash), embedding) in batch.iter().zip(embeddings) {
+            let vector = encode_embedding(&normalize_embedding(embedding))?;
+            transaction
+                .execute(
+                    "INSERT INTO capture_embeddings
+                     (capture_id, model_id, index_version, dimensions, content_hash, vector, updated_at)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(capture_id) DO UPDATE SET
+                        model_id = excluded.model_id,
+                        index_version = excluded.index_version,
+                        dimensions = excluded.dimensions,
+                        content_hash = excluded.content_hash,
+                        vector = excluded.vector,
+                        updated_at = excluded.updated_at",
+                    params![
+                        capture_id,
+                        MODEL_ID,
+                        INDEX_VERSION,
+                        MODEL_DIMENSIONS as i64,
+                        content_hash,
+                        vector,
+                        now()
+                    ],
+                )
+                .map_err(err)?;
+        }
+        transaction.commit().map_err(err)?;
+        indexed += batch.len();
+        state.local_search.set_index_progress(indexed, total);
+        let _ = app.emit("local-search-status-changed", state.local_search.status());
+    }
+    Ok(())
+}
+
+fn refresh_search_index_best_effort(app: &AppHandle, state: &AppState, capture_id: &str) {
+    refresh_search_indexes_best_effort(app, state, &[capture_id.to_string()]);
+}
+
+fn refresh_search_indexes_best_effort(app: &AppHandle, state: &AppState, capture_ids: &[String]) {
+    let refreshed = open_conn(state).and_then(|conn| {
+        for capture_id in capture_ids {
+            refresh_search_document(&conn, capture_id)?;
+        }
+        Ok(())
+    });
+    match refreshed {
+        Ok(()) => {}
+        Err(error) => {
+            eprintln!("Search document refresh failed: {error}");
+            return;
+        }
+    }
+    if state.local_search.status().phase != LocalSearchPhase::Ready
+        || !state.local_search.try_begin_operation()
+    {
+        return;
+    }
+    let app = app.clone();
+    let state = state.clone();
+    thread::spawn(move || {
+        if let Err(error) = index_local_embeddings(&app, &state) {
+            eprintln!("Incremental local indexing failed: {error}");
+        }
+        state.local_search.finish_operation();
+        let _ = app.emit("local-search-status-changed", state.local_search.status());
+    });
+}
+
+fn escaped_fts_query(query: &str) -> Option<String> {
+    let terms = query_terms(query)
+        .into_iter()
+        .filter_map(|term| {
+            let safe = term
+                .chars()
+                .filter(|character| {
+                    character.is_alphanumeric() || *character == '_' || *character == '-'
+                })
+                .collect::<String>();
+            (!safe.is_empty()).then(|| format!("\"{}\"", safe.replace('"', "\"\"")))
+        })
+        .take(24)
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| terms.join(" OR "))
+}
+
+fn reciprocal_rank_fusion(
+    lexical: &[String],
+    semantic: &[String],
+) -> HashMap<String, (f64, Vec<String>)> {
+    let mut scores = HashMap::<String, (f64, Vec<String>)>::new();
+    for (field, ranking) in [("lexical", lexical), ("semantic", semantic)] {
+        for (index, capture_id) in ranking.iter().enumerate() {
+            let entry = scores.entry(capture_id.clone()).or_default();
+            entry.0 += 1.0 / (60.0 + (index + 1) as f64);
+            push_field(&mut entry.1, field);
+        }
+    }
+    scores
+}
+
+fn hybrid_magic_search(
+    conn: &Connection,
+    state: &AppState,
+    query: &str,
+    captures: Vec<CaptureDto>,
+    limit: usize,
+    require_vector: bool,
+) -> Result<(Vec<ScoredCapture>, String, Option<String>), AppError> {
+    let vector_ready = state.local_search.status().phase == LocalSearchPhase::Ready;
+    if require_vector && !vector_ready {
+        return Err(AppError::new("local_search.not_ready"));
+    }
+    if is_broad_collection_query(query) {
+        return Ok((
+            captures
+                .into_iter()
+                .enumerate()
+                .map(|(index, capture)| ScoredCapture {
+                    capture,
+                    score: 1.0 / (index + 1) as f64,
+                    matched_fields: vec!["recency".into()],
+                })
+                .collect(),
+            "recency".into(),
+            None,
+        ));
+    }
+
+    let pool = (limit.saturating_mul(8)).clamp(50, 200);
+    let fallback_captures = captures.clone();
+    let allowed = captures
+        .iter()
+        .map(|capture| capture.id.clone())
+        .collect::<HashSet<_>>();
+    let mut lexical = Vec::new();
+    if let Some(fts_query) = escaped_fts_query(query) {
+        let mut stmt = conn
+            .prepare(
+                "SELECT d.capture_id
+                 FROM capture_search_fts
+                 JOIN capture_search_documents d ON d.id = capture_search_fts.rowid
+                 WHERE capture_search_fts MATCH ?
+                 ORDER BY bm25(capture_search_fts, 5.0, 4.0, 2.0), d.capture_id",
+            )
+            .map_err(|error| AppError::from(err(error)))?;
+        let matches = stmt
+            .query_map([fts_query], |row| row.get::<_, String>(0))
+            .map_err(|error| AppError::from(err(error)))?;
+        for capture_id in matches {
+            let capture_id = capture_id.map_err(|error| AppError::from(err(error)))?;
+            if allowed.contains(&capture_id) {
+                lexical.push(capture_id);
+                if lexical.len() >= pool {
+                    break;
+                }
+            }
+        }
+    }
+
+    let mut semantic = Vec::new();
+    if vector_ready {
+        let query_vector =
+            normalize_embedding(state.local_search.embed_query(query).map_err(|error| {
+                eprintln!("Local query embedding failed: {error}");
+                AppError::new("local_search.load_failed")
+            })?);
+        let mut stmt = conn
+            .prepare(
+                "SELECT e.capture_id, e.vector FROM capture_embeddings e
+                 JOIN capture_search_documents d ON d.capture_id = e.capture_id
+                    AND d.content_hash = e.content_hash
+                 WHERE e.model_id = ? AND e.index_version = ? AND e.dimensions = ?",
+            )
+            .map_err(|error| AppError::from(err(error)))?;
+        let rows = stmt
+            .query_map(
+                params![MODEL_ID, INDEX_VERSION, MODEL_DIMENSIONS as i64],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
+            )
+            .map_err(|error| AppError::from(err(error)))?;
+        let mut scored = Vec::new();
+        for row in rows {
+            let (capture_id, bytes) = row.map_err(|error| AppError::from(err(error)))?;
+            if allowed.contains(&capture_id) {
+                if let Some(vector) = decode_embedding(&bytes) {
+                    scored.push((capture_id, cosine_similarity(&query_vector, &vector)));
+                }
+            }
+        }
+        scored.sort_by(|left, right| {
+            right
+                .1
+                .total_cmp(&left.1)
+                .then_with(|| left.0.cmp(&right.0))
+        });
+        semantic.extend(scored.into_iter().take(pool).map(|(id, _)| id));
+    }
+
+    let rrf = reciprocal_rank_fusion(&lexical, &semantic);
+    let mut relevant = captures
+        .into_iter()
+        .filter_map(|capture| {
+            rrf.get(&capture.id).map(|(score, fields)| ScoredCapture {
+                capture,
+                score: *score,
+                matched_fields: fields.clone(),
+            })
+        })
+        .collect::<Vec<_>>();
+    relevant.sort_by(|left, right| {
+        right
+            .score
+            .total_cmp(&left.score)
+            .then_with(|| right.capture.captured_at.cmp(&left.capture.captured_at))
+            .then_with(|| left.capture.id.cmp(&right.capture.id))
+    });
+
+    let retrieval_engine = match (!lexical.is_empty(), !semantic.is_empty()) {
+        (true, true) => "fts5+e5+rrf",
+        (true, false) => "fts5",
+        (false, true) => "e5",
+        (false, false) => "legacy",
+    };
+    if relevant.is_empty() {
+        let intent = detect_chat_intent(query);
+        relevant = score_captures_for_query(query, fallback_captures, &intent);
+        relevant.sort_by(|left, right| right.score.total_cmp(&left.score));
+    }
+    Ok((
+        relevant,
+        retrieval_engine.into(),
+        vector_ready.then(|| MODEL_ID.into()),
+    ))
+}
+
 fn load_magic_search_captures(
     conn: &Connection,
     request: &MagicSearchRequest,
@@ -4324,8 +4937,7 @@ fn load_magic_search_captures(
            AND (?4 IS NULL OR EXISTS (
                 SELECT 1 FROM capture_tags ct WHERE ct.capture_id = c.id AND ct.tag = ?4
            ))
-         ORDER BY c.captured_at DESC
-         LIMIT 500",
+         ORDER BY c.captured_at DESC",
         )
         .map_err(err)?;
     let mut captures = stmt
@@ -4612,8 +5224,9 @@ fn constrain_magic_response(text: &str, mode: MagicResponseMode) -> String {
 
 fn preview_magic_search_document(
     conn: &Connection,
+    state: &AppState,
     mut request: MagicSearchRequest,
-) -> Result<MagicSearchPreviewDto, String> {
+) -> CommandResult<MagicSearchPreviewDto> {
     let query = request.query.trim().to_string();
     let mode = classify_magic_response(&query, request.response_mode.as_deref());
     request.response_mode = Some(mode.as_str().to_string());
@@ -4626,13 +5239,25 @@ fn preview_magic_search_document(
         });
     }
 
+    let settings = settings_from_conn(conn, state)?;
     let sensitive_lookup = is_sensitive_lookup(&query);
-    let intent = detect_chat_intent(&query);
-    let mut scored = score_captures_for_query(&query, captures, &intent);
+    let limit = request
+        .limit
+        .unwrap_or(mode.evidence_limit())
+        .min(mode.evidence_limit())
+        .max(1);
+    let (mut scored, _, _) = hybrid_magic_search(
+        conn,
+        state,
+        &query,
+        captures,
+        limit,
+        settings.magic_search_engine == "local",
+    )?;
     if sensitive_lookup {
         for item in &mut scored {
             if capture_sensitive_value(&item.capture).is_some() {
-                item.score += 100;
+                item.score += 100.0;
             }
         }
     }
@@ -4644,15 +5269,10 @@ fn preview_magic_search_document(
             if sensitive_lookup {
                 capture_sensitive_value(&item.capture).is_some()
             } else {
-                item.score > 0 || use_full_scope
+                item.score > 0.0 || use_full_scope
             }
         })
         .count();
-    let limit = request
-        .limit
-        .unwrap_or(mode.evidence_limit())
-        .min(mode.evidence_limit())
-        .max(1);
     Ok(MagicSearchPreviewDto {
         evidence_count: matching_count.min(limit),
         available_count,
@@ -4674,30 +5294,36 @@ fn generate_magic_search_document(
     request.response_mode = Some(mode.as_str().to_string());
     let sensitive_lookup = is_sensitive_lookup(&query);
     let captures = load_magic_search_captures(conn, &request)?;
-    let intent = detect_chat_intent(&query);
-    let mut scored = score_captures_for_query(&query, captures, &intent);
-    if sensitive_lookup {
-        for item in &mut scored {
-            if capture_sensitive_value(&item.capture).is_some() {
-                item.score += 100;
-            }
-        }
-    }
-    scored.sort_by_key(|capture| std::cmp::Reverse(capture.score));
-    let use_full_scope =
-        request.tag.is_some() || request.context_id.is_some() || is_broad_collection_query(&query);
     let limit = request
         .limit
         .unwrap_or(mode.evidence_limit())
         .min(mode.evidence_limit())
         .max(1);
+    let (mut scored, retrieval_engine, retrieval_model) = hybrid_magic_search(
+        conn,
+        state,
+        &query,
+        captures,
+        limit,
+        settings.magic_search_engine == "local",
+    )?;
+    if sensitive_lookup {
+        for item in &mut scored {
+            if capture_sensitive_value(&item.capture).is_some() {
+                item.score += 100.0;
+            }
+        }
+    }
+    scored.sort_by(|left, right| right.score.total_cmp(&left.score));
+    let use_full_scope =
+        request.tag.is_some() || request.context_id.is_some() || is_broad_collection_query(&query);
     let relevant = scored
         .into_iter()
         .filter(|item| {
             if sensitive_lookup {
                 capture_sensitive_value(&item.capture).is_some()
             } else {
-                item.score > 0 || use_full_scope
+                item.score > 0.0 || use_full_scope
             }
         })
         .take(limit)
@@ -4743,14 +5369,14 @@ fn generate_magic_search_document(
         portuguese,
         sensitive_value.as_deref(),
     );
-    let (markdown, provider, model, generation_warning) = if sensitive_value.is_some() {
+    let (markdown, provider, model, generation_warning) = if sensitive_lookup {
         (
             deterministic,
             "local".to_string(),
             "secure-lookup".to_string(),
             None,
         )
-    } else if settings.ai_api_key.trim().is_empty() {
+    } else if settings.magic_search_engine == "local" || settings.ai_api_key.trim().is_empty() {
         (
             deterministic,
             "local".to_string(),
@@ -4826,9 +5452,11 @@ fn generate_magic_search_document(
         .map_err(err)?;
     transaction.execute(
         "INSERT INTO magic_search_documents
-         (id, root_id, previous_document_id, version, title, query, markdown, provider, model, filters_json, generation_warning, evidence_count, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        params![id, root_id, request.previous_document_id, version, title, query, markdown, provider, model, filters_json, generation_warning_json, relevant.len() as i64, created_at],
+         (id, root_id, previous_document_id, version, title, query, markdown, provider, model,
+          retrieval_engine, retrieval_model, filters_json, generation_warning, evidence_count, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![id, root_id, request.previous_document_id, version, title, query, markdown, provider, model,
+            retrieval_engine, retrieval_model, filters_json, generation_warning_json, relevant.len() as i64, created_at],
     ).map_err(err)?;
     for (rank, item) in relevant.iter().enumerate() {
         let capture = &item.capture;
@@ -5341,13 +5969,14 @@ fn build_magic_search_prompt(
 fn list_magic_search_documents(conn: &Connection) -> Result<Vec<MagicSearchListItemDto>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT id, root_id, version, title, query, provider, model, evidence_count, created_at, filters_json
+            "SELECT id, root_id, version, title, query, provider, model, retrieval_engine,
+                    retrieval_model, evidence_count, created_at, filters_json
          FROM magic_search_documents ORDER BY created_at DESC LIMIT 100",
         )
         .map_err(err)?;
     let documents = stmt
         .query_map([], |row| {
-            let filters_json = row.get::<_, String>(9)?;
+            let filters_json = row.get::<_, String>(11)?;
             let response_mode = serde_json::from_str::<MagicSearchRequest>(&filters_json)
                 .ok()
                 .and_then(|filters| filters.response_mode)
@@ -5360,8 +5989,10 @@ fn list_magic_search_documents(conn: &Connection) -> Result<Vec<MagicSearchListI
                 query: row.get(4)?,
                 provider: row.get(5)?,
                 model: row.get(6)?,
-                evidence_count: row.get(7)?,
-                created_at: row.get(8)?,
+                retrieval_engine: row.get(7)?,
+                retrieval_model: row.get(8)?,
+                evidence_count: row.get(9)?,
+                created_at: row.get(10)?,
                 response_mode,
             })
         })
@@ -5377,7 +6008,7 @@ fn get_magic_search_document(
 ) -> Result<MagicSearchDocumentDto, String> {
     let row = conn.query_row(
         "SELECT id, root_id, previous_document_id, version, title, query, markdown, provider, model,
-                filters_json, generation_warning, evidence_count, created_at
+                retrieval_engine, retrieval_model, filters_json, generation_warning, evidence_count, created_at
          FROM magic_search_documents WHERE id = ?",
         [id],
         |row| {
@@ -5393,12 +6024,14 @@ fn get_magic_search_document(
                 row.get::<_, String>(8)?,
                 row.get::<_, String>(9)?,
                 row.get::<_, Option<String>>(10)?,
-                row.get::<_, i64>(11)?,
-                row.get::<_, String>(12)?,
+                row.get::<_, String>(11)?,
+                row.get::<_, Option<String>>(12)?,
+                row.get::<_, i64>(13)?,
+                row.get::<_, String>(14)?,
             ))
         },
     ).map_err(err)?;
-    let filters: MagicSearchRequest = serde_json::from_str(&row.9).map_err(err)?;
+    let filters: MagicSearchRequest = serde_json::from_str(&row.11).map_err(err)?;
     let response_mode = filters
         .response_mode
         .clone()
@@ -5413,10 +6046,12 @@ fn get_magic_search_document(
         markdown: row.6,
         provider: row.7,
         model: row.8,
+        retrieval_engine: row.9,
+        retrieval_model: row.10,
         filters,
-        generation_warning: row.10.as_deref().and_then(AppNotice::from_stored),
-        evidence_count: row.11,
-        created_at: row.12,
+        generation_warning: row.12.as_deref().and_then(AppNotice::from_stored),
+        evidence_count: row.13,
+        created_at: row.14,
         evidence: Vec::new(),
         response_mode,
         sensitive_value: None,
@@ -5578,13 +6213,20 @@ fn open_conn(state: &AppState) -> Result<Connection, String> {
     Ok(conn)
 }
 
-fn initialize_database(state: &AppState) -> Result<(), String> {
+fn initialize_database(state: &AppState, new_install: bool) -> Result<(), String> {
     fs::create_dir_all(&state.app_dir).map_err(err)?;
     ensure_encrypted_database(state)?;
     let conn = open_conn(state)?;
     conn.query_row("SELECT count(*) FROM sqlite_master", [], |row| row.get::<_, i64>(0))
         .map_err(|error| format!("Não foi possível abrir a base criptografada. Verifique a credencial do ScryPuppy no Windows Credential Manager: {error}"))?;
     migrate(&conn).map_err(err)?;
+    if get_setting(&conn, "magic_search_engine")?.is_none() {
+        set_setting(
+            &conn,
+            "magic_search_engine",
+            initial_magic_search_engine(new_install),
+        )?;
+    }
     migrate_legacy_ai_key(&conn)?;
     Ok(())
 }
@@ -5822,6 +6464,18 @@ fn secure_remove_dir(path: &Path) -> Result<(), String> {
 }
 
 fn delete_all_data_from_state(state: &AppState) -> Result<(), String> {
+    state.local_search.request_cancel();
+    for _ in 0..500 {
+        if !state.local_search.operation_running() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    if state.local_search.operation_running() {
+        return Err(
+            "Local search is busy. Try deleting the library again when indexing stops.".into(),
+        );
+    }
     secure_remove_dir(&state.app_dir.join("assets"))?;
     secure_remove_dir(&state.markdown_dir())?;
     for suffix in [
@@ -5838,7 +6492,8 @@ fn delete_all_data_from_state(state: &AppState) -> Result<(), String> {
         )))?;
     }
     delete_credential(AI_KEY_CREDENTIAL)?;
-    initialize_database(state)?;
+    initialize_database(state, true)?;
+    state.local_search.set_index_progress(0, 0);
     sync_markdown(state).map_err(err)
 }
 
@@ -6004,6 +6659,50 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             value TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS capture_search_documents (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            capture_id TEXT NOT NULL UNIQUE REFERENCES captures(id) ON DELETE CASCADE,
+            content TEXT NOT NULL DEFAULT '',
+            ocr TEXT NOT NULL DEFAULT '',
+            metadata TEXT NOT NULL DEFAULT '',
+            content_hash TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS capture_search_fts USING fts5(
+            content,
+            ocr,
+            metadata,
+            content='capture_search_documents',
+            content_rowid='id',
+            tokenize='unicode61 remove_diacritics 2'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS capture_search_documents_ai AFTER INSERT ON capture_search_documents BEGIN
+            INSERT INTO capture_search_fts(rowid, content, ocr, metadata)
+            VALUES (new.id, new.content, new.ocr, new.metadata);
+        END;
+        CREATE TRIGGER IF NOT EXISTS capture_search_documents_ad AFTER DELETE ON capture_search_documents BEGIN
+            INSERT INTO capture_search_fts(capture_search_fts, rowid, content, ocr, metadata)
+            VALUES ('delete', old.id, old.content, old.ocr, old.metadata);
+        END;
+        CREATE TRIGGER IF NOT EXISTS capture_search_documents_au AFTER UPDATE ON capture_search_documents BEGIN
+            INSERT INTO capture_search_fts(capture_search_fts, rowid, content, ocr, metadata)
+            VALUES ('delete', old.id, old.content, old.ocr, old.metadata);
+            INSERT INTO capture_search_fts(rowid, content, ocr, metadata)
+            VALUES (new.id, new.content, new.ocr, new.metadata);
+        END;
+
+        CREATE TABLE IF NOT EXISTS capture_embeddings (
+            capture_id TEXT PRIMARY KEY REFERENCES captures(id) ON DELETE CASCADE,
+            model_id TEXT NOT NULL,
+            index_version INTEGER NOT NULL,
+            dimensions INTEGER NOT NULL,
+            content_hash TEXT NOT NULL,
+            vector BLOB NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS magic_search_documents (
             id TEXT PRIMARY KEY,
             root_id TEXT NOT NULL,
@@ -6045,6 +6744,8 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         CREATE INDEX IF NOT EXISTS idx_magic_search_root ON magic_search_documents(root_id, version DESC);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_magic_search_root_version ON magic_search_documents(root_id, version);
         CREATE INDEX IF NOT EXISTS idx_magic_search_evidence_document ON magic_search_evidence(document_id, rank);
+        CREATE INDEX IF NOT EXISTS idx_capture_embeddings_model
+            ON capture_embeddings(model_id, index_version, dimensions);
         ",
     )?;
 
@@ -6091,6 +6792,18 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     if !column_exists(conn, "magic_search_documents", "generation_warning")? {
         conn.execute(
             "ALTER TABLE magic_search_documents ADD COLUMN generation_warning TEXT",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "magic_search_documents", "retrieval_engine")? {
+        conn.execute(
+            "ALTER TABLE magic_search_documents ADD COLUMN retrieval_engine TEXT NOT NULL DEFAULT 'legacy'",
+            [],
+        )?;
+    }
+    if !column_exists(conn, "magic_search_documents", "retrieval_model")? {
+        conn.execute(
+            "ALTER TABLE magic_search_documents ADD COLUMN retrieval_model TEXT",
             [],
         )?;
     }
@@ -6663,6 +7376,7 @@ fn kick_ocr_worker(app: AppHandle, state: AppState) {
                     let _ = app.emit("capture-analysis-updated", CaptureUpdatedEvent { capture });
                 }
             }
+            refresh_search_index_best_effort(&app, &state, &capture_id);
         }
 
         if let Ok(mut running) = state.ocr_worker_running.lock() {
@@ -6877,6 +7591,7 @@ fn analyze_context_suggestions(
 
 #[tauri::command]
 fn apply_context_suggestions(
+    app: AppHandle,
     state: State<AppState>,
     suggestions: Vec<ApplyContextSuggestion>,
 ) -> CommandResult<ApplyContextSuggestionsResult> {
@@ -6885,6 +7600,7 @@ fn apply_context_suggestions(
     let mut contexts_created = 0;
     let mut associations_added = 0;
     let mut touched = Vec::new();
+    let mut touched_captures = Vec::new();
     for suggestion in suggestions {
         let _suggestion_id = suggestion.suggestion_id;
         let context_id = if let Some(id) = suggestion.existing_context_id {
@@ -6924,11 +7640,15 @@ fn apply_context_suggestions(
                     ],
                 )
                 .map_err(err)?;
+            touched_captures.push(capture_id);
         }
         touched.push(context_id);
     }
     transaction.commit().map_err(err)?;
     sync_contexts_best_effort(&state, &touched);
+    touched_captures.sort();
+    touched_captures.dedup();
+    refresh_search_indexes_best_effort(&app, &state, &touched_captures);
     Ok(ApplyContextSuggestionsResult {
         contexts_created,
         associations_added,
@@ -7801,6 +8521,9 @@ fn settings_from_conn(conn: &Connection, state: &AppState) -> Result<SettingsDto
         // cannot be queried from Credential Manager. A missing AI credential
         // should never disable the rest of the Settings screen.
         ai_api_key_configured: get_credential(AI_KEY_CREDENTIAL).ok().flatten().is_some(),
+        magic_search_engine: get_setting(conn, "magic_search_engine")?
+            .filter(|value| value == "local")
+            .unwrap_or_else(|| "provider".into()),
         quick_context_enabled: setting_bool("quick_context_enabled", true)?,
         quick_context_after_reference: setting_bool("quick_context_after_reference", false)?,
         quick_context_timeout_seconds: get_setting(conn, "quick_context_timeout_seconds")?
@@ -8220,6 +8943,7 @@ pub fn run() {
             app.asset_protocol_scope()
                 .allow_directory(&assets_dir, true)?;
             let database_path = app_dir.join("scryppy.sqlite");
+            let new_install = !database_path.exists();
             let database_key = get_or_create_secret(
                 DATABASE_KEY_CREDENTIAL,
                 !database_path.exists()
@@ -8230,6 +8954,7 @@ pub fn run() {
                 get_or_create_secret(CONTEXT_KEY_CREDENTIAL, true).map_err(io_other)?;
             let clipboard = Arc::new(ClipboardService::start().map_err(io_other)?);
             let monitor_handle = ClipboardMonitorHandle::new();
+            let local_search = Arc::new(LocalSearchManager::new(&app_dir));
             let state = AppState {
                 app_dir,
                 database_key,
@@ -8241,8 +8966,9 @@ pub fn run() {
                 clipboard_monitor: monitor_handle.clone(),
                 ocr_worker_running: Arc::new(Mutex::new(false)),
                 paste_target_window: Arc::new(Mutex::new(None)),
+                local_search,
             };
-            initialize_database(&state).map_err(io_other)?;
+            initialize_database(&state, new_install).map_err(io_other)?;
             cleanup_clipboard_vault(&state).map_err(io_other)?;
             app.manage(state.clone());
 
@@ -8268,7 +8994,49 @@ pub fn run() {
             enqueue_pending_ocr_jobs(&conn).map_err(io_other)?;
             sync_markdown(&state)?;
             clipboard_monitor::start(app.handle().clone(), state.clone(), monitor_handle);
-            kick_ocr_worker(app.handle().clone(), state);
+            kick_ocr_worker(app.handle().clone(), state.clone());
+
+            let local_app = app.handle().clone();
+            let local_state = state.clone();
+            thread::spawn(move || {
+                if local_state.local_search.installed() {
+                    if !local_state.local_search.try_begin_operation() {
+                        return;
+                    }
+                    local_state
+                        .local_search
+                        .set_phase(LocalSearchPhase::Indexing, None);
+                    let result = local_state
+                        .local_search
+                        .load_model(false)
+                        .and_then(|_| index_local_embeddings(&local_app, &local_state));
+                    if let Err(error) = result {
+                        eprintln!("Installed local model could not be loaded: {error}");
+                        local_state.local_search.set_phase(
+                            LocalSearchPhase::Error,
+                            Some(AppNotice::new("local_search.load_failed")),
+                        );
+                    } else {
+                        local_state
+                            .local_search
+                            .set_phase(LocalSearchPhase::Ready, None);
+                    }
+                    local_state.local_search.finish_operation();
+                    let _ = local_app.emit(
+                        "local-search-status-changed",
+                        local_state.local_search.status(),
+                    );
+                } else if let Ok(conn) = open_conn(&local_state) {
+                    if let Err(error) = reconcile_search_documents(&conn) {
+                        eprintln!("FTS5 background reconciliation failed: {error}");
+                    }
+                    let _ = local_search_status_from_db(&local_state);
+                    let _ = local_app.emit(
+                        "local-search-status-changed",
+                        local_state.local_search.status(),
+                    );
+                }
+            });
 
             if let Some(window) = app.get_webview_window("main") {
                 let app_handle = app.handle().clone();
@@ -8392,6 +9160,9 @@ pub fn run() {
             preview_data_cleanup,
             delete_data_by_filter,
             get_ai_provider_options,
+            get_local_search_status,
+            prepare_local_search,
+            remove_local_search_model,
             ask_chat,
             get_tag_document,
             export_tag_document,
@@ -8438,6 +9209,87 @@ mod tests {
     #[test]
     fn content_hash_changes_with_content() {
         assert_ne!(content_hash("abc"), content_hash("abcd"));
+    }
+
+    #[test]
+    fn install_kind_selects_the_compatible_magic_search_default() {
+        assert_eq!(initial_magic_search_engine(true), "local");
+        assert_eq!(initial_magic_search_engine(false), "provider");
+    }
+
+    #[test]
+    fn search_schema_is_idempotent_and_fts_tracks_capture_documents() {
+        let conn = Connection::open_in_memory().expect("in-memory database");
+        migrate(&conn).expect("first migration");
+        migrate(&conn).expect("idempotent migration");
+        let captured_at = now();
+        conn.execute(
+            "INSERT INTO captures (
+                id, context_id, content_text, content_hash, captured_at, platform,
+                metadata_json, capture_kind, created_at
+             ) VALUES ('fts-capture', 'inbox', 'quarterly launch checklist', 'source', ?,
+                'windows', '{}', 'capture', ?)",
+            params![captured_at, captured_at],
+        )
+        .expect("capture insert");
+        refresh_search_document(&conn, "fts-capture").expect("search document refresh");
+        let found = conn
+            .query_row(
+                "SELECT count(*) FROM capture_search_fts WHERE capture_search_fts MATCH '\"launch\"'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("fts query");
+        assert_eq!(found, 1);
+
+        conn.execute(
+            "INSERT INTO capture_embeddings
+             (capture_id, model_id, index_version, dimensions, content_hash, vector, updated_at)
+             SELECT capture_id, ?, ?, ?, content_hash, ?, ? FROM capture_search_documents
+             WHERE capture_id = 'fts-capture'",
+            params![
+                MODEL_ID,
+                INDEX_VERSION,
+                MODEL_DIMENSIONS as i64,
+                vec![0u8; MODEL_DIMENSIONS * 4],
+                now()
+            ],
+        )
+        .expect("embedding insert");
+        conn.execute("DELETE FROM captures WHERE id = 'fts-capture'", [])
+            .expect("capture delete");
+        let documents = conn
+            .query_row("SELECT count(*) FROM capture_search_documents", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        let embeddings = conn
+            .query_row("SELECT count(*) FROM capture_embeddings", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .unwrap();
+        assert_eq!((documents, embeddings), (0, 0));
+    }
+
+    #[test]
+    fn fts_queries_are_quoted_and_strip_match_operators() {
+        let escaped = escaped_fts_query("release: notes* OR \"private\"")
+            .expect("query should retain safe terms");
+        assert!(!escaped.contains(':'));
+        assert!(!escaped.contains('*'));
+        assert!(escaped
+            .split(" OR ")
+            .all(|term| term.starts_with('"') && term.ends_with('"')));
+    }
+
+    #[test]
+    fn reciprocal_rank_fusion_combines_lexical_and_semantic_ranks() {
+        let lexical = vec!["a".to_string(), "b".to_string()];
+        let semantic = vec!["b".to_string(), "c".to_string()];
+        let scores = reciprocal_rank_fusion(&lexical, &semantic);
+        assert!(scores["b"].0 > scores["a"].0);
+        assert_eq!(scores["b"].1, vec!["lexical", "semantic"]);
+        assert_eq!(scores["c"].1, vec!["semantic"]);
     }
 
     #[test]
@@ -8995,6 +9847,7 @@ mod tests {
             clipboard_monitor: ClipboardMonitorHandle::new(),
             ocr_worker_running: Arc::new(Mutex::new(false)),
             paste_target_window: Arc::new(Mutex::new(None)),
+            local_search: Arc::new(LocalSearchManager::new(Path::new("test-data"))),
         }
     }
 
@@ -9011,6 +9864,7 @@ mod tests {
             ai_model: "deepseek-v4-flash".into(),
             ai_api_key: String::new(),
             ai_api_key_configured: false,
+            magic_search_engine: "provider".into(),
             quick_context_enabled: true,
             quick_context_after_reference: false,
             quick_context_timeout_seconds: 8,

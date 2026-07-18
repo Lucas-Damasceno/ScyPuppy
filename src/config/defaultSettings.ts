@@ -12,6 +12,7 @@ const baseSettings: Settings = {
   ai_model: "deepseek-v4-flash",
   ai_api_key: "",
   ai_api_key_configured: false,
+  magic_search_engine: "local",
   clipboard_monitor_enabled: false,
   clipboard_monitor_capture_screenshots: false,
   clipboard_monitor_quick_context_enabled: false,

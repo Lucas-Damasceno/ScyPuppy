@@ -1,5 +1,6 @@
+import { useEffect, useState } from "react";
 import * as api from "../../api/tauri";
-import { formatAppError, type MessageParams } from "../../appMessages";
+import { formatAppError, formatAppMessage, type MessageParams } from "../../appMessages";
 import {
   AiControls,
   ClipboardCaptureControls,
@@ -8,8 +9,9 @@ import {
   StartupAndShortcutsControls,
 } from "../../components/SettingsControls";
 import type { SettingsSaveState } from "../../hooks/useSettingsCoordinator";
+import { useTauriEvent } from "../../hooks/useTauriEvent";
 import { normalizeLanguage, translate, type AppLanguage } from "../../i18n";
-import type { AiProviderOption, Settings } from "../../types";
+import type { AiProviderOption, LocalSearchStatus, Settings } from "../../types";
 import { AppUpdateSettings } from "../updates/AppUpdateNotice";
 import type { AppUpdaterController } from "../updates/useAppUpdater";
 import { LiteIcon } from "./LiteIcon";
@@ -32,6 +34,33 @@ type LiteSettingsDialogProps = {
 
 export function LiteSettingsDialog({ settings, aiOptions, language, updater, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
   const tr = (english: string, variables?: MessageParams) => translate(language, english, variables);
+  const [localStatus, setLocalStatus] = useState<LocalSearchStatus | null>(null);
+  const [localActionPending, setLocalActionPending] = useState(false);
+  useEffect(() => { void api.getLocalSearchStatus().then(setLocalStatus).catch(() => undefined); }, []);
+  useTauriEvent<LocalSearchStatus>("local-search-status-changed", ({ payload }) => setLocalStatus(payload));
+
+  async function prepareLocalSearch() {
+    setLocalActionPending(true);
+    try {
+      setLocalStatus(await api.prepareLocalSearch());
+    } catch (error) {
+      onStatus(formatAppError(error, tr));
+    } finally {
+      setLocalActionPending(false);
+    }
+  }
+
+  async function removeLocalModel() {
+    if (!window.confirm(tr("Remove the downloaded model? Captures and the search index will be preserved."))) return;
+    setLocalActionPending(true);
+    try {
+      setLocalStatus(await api.removeLocalSearchModel());
+    } catch (error) {
+      onStatus(formatAppError(error, tr));
+    } finally {
+      setLocalActionPending(false);
+    }
+  }
   return (
     <div className="modal-backdrop lite-modal-backdrop lite-settings-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) onClose(); }}>
       <section className="settings-modal lite-modal-surface" role="dialog" aria-modal="true" aria-labelledby="lite-settings-title">
@@ -54,6 +83,44 @@ export function LiteSettingsDialog({ settings, aiOptions, language, updater, sav
             </button>
           </section>
           <AppUpdateSettings updater={updater} language={language} />
+          <section className="settings-group magic-engine-settings">
+            <div className="settings-group-title"><LiteIcon name="search" /><div><strong>{tr("Magic Search")}</strong><span>{tr("Choose how evidence is retrieved and answers are generated")}</span></div></div>
+            <div className="settings-control-stack magic-engine-control-stack">
+              <div className="magic-engine-options" role="radiogroup" aria-label={tr("Magic Search")}>
+                <button type="button" role="radio" aria-checked={settings.magic_search_engine === "local"} className={`magic-engine-card ${settings.magic_search_engine === "local" ? "is-selected" : ""}`} onClick={() => void onPatch({ magic_search_engine: "local" })}>
+                  <span className="settings-radio-indicator" aria-hidden="true"><span /></span>
+                  <span className="magic-engine-card-copy">
+                    <span className="magic-engine-card-title"><LiteIcon name="lock" /><strong>{tr("Local beta")}</strong><span>{tr("Beta")}</span></span>
+                    <small>{tr("Multilingual semantic search and local answers. Captures never leave this computer.")}</small>
+                  </span>
+                </button>
+                <button type="button" role="radio" aria-checked={settings.magic_search_engine === "provider"} className={`magic-engine-card ${settings.magic_search_engine === "provider" ? "is-selected" : ""}`} onClick={() => void onPatch({ magic_search_engine: "provider" })}>
+                  <span className="settings-radio-indicator" aria-hidden="true"><span /></span>
+                  <span className="magic-engine-card-copy">
+                    <span className="magic-engine-card-title"><LiteIcon name="sparkles" /><strong>{tr("AI provider")}</strong></span>
+                    <small>{tr("Searches your local evidence, then may send selected evidence to the configured provider.")}</small>
+                  </span>
+                </button>
+              </div>
+              {settings.magic_search_engine === "local" && <>
+                <div className="local-model-status">
+                  <span className="settings-control-copy">
+                    <strong>{localStatus?.model_name ?? "Multilingual E5 Small"}</strong>
+                    <small>
+                      {localStatus ? localPhaseLabel(localStatus, tr) : tr("Checking local model...")}
+                      {localStatus && localStatus.cache_bytes > 0 && <>{" \u00b7 "}{formatBytes(localStatus.cache_bytes)} {tr("on disk")}</>}
+                    </small>
+                  </span>
+                  <div className="local-model-actions">
+                    {(localStatus?.can_download || localStatus?.can_retry) && <button className="settings-inline-button" disabled={localActionPending} onClick={() => void prepareLocalSearch()}><LiteIcon name="refresh" />{tr(localStatus.can_retry ? "Retry download" : "Download model")}</button>}
+                    {localStatus?.can_remove && <button className="settings-inline-button is-danger" disabled={localActionPending || localStatus.phase === "downloading" || localStatus.phase === "indexing" || localStatus.phase === "removing"} onClick={() => void removeLocalModel()}><LiteIcon name="trash" />{tr("Remove model")}</button>}
+                  </div>
+                </div>
+                {localStatus?.phase === "indexing" && localStatus.total_count > 0 && <div className="local-model-progress"><progress value={localStatus.indexed_count} max={localStatus.total_count} /></div>}
+                {localStatus?.error && <p className="settings-dependency-hint is-error">{formatAppMessage(localStatus.error, tr)}</p>}
+              </>}
+            </div>
+          </section>
           <section className="settings-group ai-settings-group">
             <div className="settings-group-title"><LiteIcon name="sparkles" /><div><strong>{tr("Artificial intelligence")}</strong><span>{tr("Optional provider for better direct answers")}</span></div></div>
             <AiControls settings={settings} options={aiOptions} tr={tr} onPatch={onPatch} onSaveCredential={(value) => onPatch({ ai_api_key: value })} onClearCredential={onClearCredential} />
@@ -80,4 +147,20 @@ export function LiteSettingsDialog({ settings, aiOptions, language, updater, sav
       </section>
     </div>
   );
+}
+
+function localPhaseLabel(status: LocalSearchStatus, tr: (english: string, variables?: MessageParams) => string) {
+  switch (status.phase) {
+    case "not_downloaded": return tr("Model not downloaded. Local Magic Search is unavailable.");
+    case "downloading": return tr("Downloading model...");
+    case "indexing": return tr("Indexing {indexed} of {total} captures...", { indexed: status.indexed_count, total: status.total_count });
+    case "ready": return tr("Ready · {count} captures indexed", { count: status.indexed_count });
+    case "error": return tr("Local model needs attention.");
+    case "removing": return tr("Removing model...");
+  }
+}
+
+function formatBytes(bytes: number) {
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

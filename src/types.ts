@@ -42,10 +42,18 @@ export type Capture = {
 export type Settings = {
   capture_screenshots: boolean; launch_at_startup: boolean; language: "en" | "pt-BR"; hotkey: string; reference_hotkey: string; paste_hotkey: string; data_dir: string;
   ai_provider: string; ai_model: string; ai_api_key: string; ai_api_key_configured: boolean;
+  magic_search_engine: MagicSearchEngine;
   clipboard_monitor_enabled: boolean; clipboard_monitor_capture_screenshots: boolean; clipboard_monitor_quick_context_enabled: boolean;
   quick_context_enabled: boolean; quick_context_after_reference: boolean; quick_context_timeout_seconds: number;
   quick_context_show_preview: boolean; quick_context_show_recent: boolean;
   onboarding_completed: boolean;
+};
+export type MagicSearchEngine = "local" | "provider";
+export type LocalSearchPhase = "not_downloaded" | "downloading" | "indexing" | "ready" | "error" | "removing";
+export type LocalSearchStatus = {
+  phase: LocalSearchPhase; model_id: string; model_name: string; cache_bytes: number;
+  indexed_count: number; total_count: number; pending_count: number;
+  error: AppMessagePayload | null; can_download: boolean; can_retry: boolean; can_remove: boolean;
 };
 export type AiProviderOption = { id: string; name: string; models: AiModelOption[] };
 export type AiModelOption = { id: string; name: string };
@@ -122,6 +130,7 @@ export type MagicSearchPreview = { evidence_count: number; available_count: numb
 export type MagicSearchDocument = {
   id: string; root_id: string; previous_document_id: string | null; version: number;
   title: string; query: string; markdown: string; provider: string; model: string;
+  retrieval_engine: string; retrieval_model: string | null;
   filters: MagicSearchRequest; generation_warning: AppMessagePayload | null;
   evidence_count: number; created_at: string; evidence: EvidenceItem[];
   response_mode: "direct" | "brief" | "document"; sensitive_value: string | null;
@@ -130,5 +139,6 @@ export type MagicSearchDocument = {
 export type MagicSearchListItem = {
   id: string; root_id: string; version: number; title: string; query: string; provider: string;
   model: string; evidence_count: number; created_at: string; response_mode: "direct" | "brief" | "document";
+  retrieval_engine: string; retrieval_model: string | null;
 };
 import type { AppMessagePayload } from "./appMessages";

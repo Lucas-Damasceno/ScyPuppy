@@ -1638,7 +1638,7 @@ function MainApp() {
                   <section className="magic-evidence-section">
                     <div><span className="eyebrow">{tr("Traceability")}</span><h3>{tr("Evidence used")}</h3></div>
                     <div className="magic-evidence-grid">
-                      {magicDocument.evidence.slice(0, magicDocument.response_mode === "direct" ? 1 : undefined).map((item, index) => (
+                      {magicDocument.evidence.map((item, index) => (
                         <button key={item.capture_id} onClick={() => { setIsMagicOpen(false); openEvidence(item.capture_id); }}>
                           <span>{index + 1}</span><div><strong>{item.app_name ?? tr("Capture")}</strong><small>{translateLegacyGeneratedContent(language, item.excerpt)}</small></div><Icon name="chevron" size={13} />
                         </button>

@@ -40,4 +40,11 @@ describe("structured app messages", () => {
     expect(formatAppMessage({ code: "ai.key_missing_local_only" }, portuguese))
       .toBe("Nenhuma chave de IA está configurada; as sugestões locais continuam disponíveis.");
   });
+
+  it("keeps local model failures structured and retryable", () => {
+    expect(formatAppError({ code: "local_search.download_failed" }, english))
+      .toBe("The local model could not be downloaded. Check your connection and try again.");
+    expect(formatAppError({ code: "local_search.not_ready" }, portuguese))
+      .toBe("Baixe o modelo local e aguarde a indexação antes de usar o Magic Search local.");
+  });
 });

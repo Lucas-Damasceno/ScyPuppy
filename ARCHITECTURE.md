@@ -165,6 +165,9 @@ The encrypted SQLite schema is created and evolved in `migrate()`.
 | `capture_ocr` | Latest OCR result for each capture |
 | `ocr_jobs` | Recoverable background OCR queue |
 | `settings` | Local preferences and onboarding completion |
+| `capture_search_documents` | Canonical bounded text, OCR, metadata, and content hashes for retrieval |
+| `capture_search_fts` | External-content SQLite FTS5 index kept in sync by triggers |
+| `capture_embeddings` | Normalized 384-dimensional E5 vectors, model identity, and index version |
 | `magic_search_documents` | Versioned generated Markdown and saved filters |
 | `magic_search_evidence` | Durable ranked evidence snapshots |
 
@@ -191,7 +194,11 @@ Deletion removes matching capture records transactionally, then securely removes
 ## Search and documents
 
 - Local Search filters stored captures without an external request.
-- Ask ScryPuppy ranks local evidence before invoking an explicitly configured provider.
+- Ask ScryPuppy retrieves evidence with weighted FTS5 BM25 and, when the optional model is ready, a brute-force cosine scan over the complete filtered vector corpus. Reciprocal Rank Fusion uses `k=60` and deterministic recency/ID tie breakers.
+- Local beta mode requires Multilingual E5 Small and keeps retrieval and deterministic synthesis on the computer. Provider mode uses the same local retrieval when available, remains functional with FTS5 alone, and preserves the deterministic fallback when no key is configured or the provider fails.
+- E5 inputs use the model's `query:` and `passage:` prefixes. One normalized vector is stored per capture. New or changed canonical content invalidates only that capture's vector.
+- FastEmbed owns the runtime download/cache under `models/fastembed`. An atomic `installed.json` marker prevents an unsuccessful download from being treated as installed. Startup never initiates a first download.
+- Local Magic Search becomes available only after the explicit model download/load and full initial library index. Incremental captures are immediately searchable through FTS5 while their vectors are added in the background.
 - Quick-answer mode returns a focused result with its evidence.
 - Document mode creates editable, versioned Markdown with numbered sources.
 - Evidence snapshots remain durable so a document keeps its source trail.
@@ -232,6 +239,8 @@ npm run build:windows
 ```
 
 The script compiles the Vite frontend, builds Tauri with `custom-protocol`, recompiles a clean locked Rust release, performs a 12-second startup check, and packages one multilingual NSIS installer.
+
+The release script rejects FastEmbed model/cache artifacts in frontend and NSIS staging. ONNX Runtime is an application dependency, but `intfloat/multilingual-e5-small` is never part of the main installer.
 
 Artifacts are written under `src-tauri/target/release/bundle/`. See [docs/windows-build.md](docs/windows-build.md) for the release guardrails.
 

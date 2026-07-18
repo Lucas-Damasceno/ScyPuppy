@@ -43,6 +43,7 @@ This gallery documents the public interface and the UX rules behind its main wor
 ![Ask ScryPuppy document mode](docs/screenshots/scrypuppy-ask-document.png)
 
 - Separate quick answers from document creation with two explicit modes.
+- Show up to five ranked evidence items for quick answers and let every item open its original capture.
 - Refresh the Context selector every time the window opens.
 - Keep Context, time period, and evidence preview close to the prompt.
 - Use a borderless internal shell because Windows supplies the outer window shape.
@@ -52,6 +53,8 @@ This gallery documents the public interface and the UX rules behind its main wor
 ![ScryPuppy Settings](docs/screenshots/scrypuppy-settings.png)
 
 - Use a conventional cog for the Settings entry and dialog identity.
+- Make Local beta and AI provider an explicit radio choice with the active engine visible at a glance.
+- Keep model download, indexing, retry, and removal states inside the standard settings row system.
 - Reuse the same controls as onboarding so values behave consistently.
 - Standardize group borders, dividers, row heights, input sizes, and focus states.
 - Keep destructive local-data actions visually separated from everyday preferences.

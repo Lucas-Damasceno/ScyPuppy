@@ -75,6 +75,23 @@ try {
   if (-not (Test-Path $nsisScript)) { throw "NSIS definition was not created: $nsisScript" }
   if (-not (Test-Path $makensis)) { throw "Tauri NSIS compiler was not found: $makensis" }
 
+  # The embedding model is an explicit, optional runtime download. Catch an
+  # accidental model/cache copy before NSIS packages it into the main installer.
+  $forbiddenModelFiles = @("model.onnx", "tokenizer.json", "installed.json")
+  $packagingRoots = @((Join-Path $repoRoot "dist"), $nsisScriptRoot)
+  $bundledModelFiles = @(
+    foreach ($root in $packagingRoots) {
+      if (Test-Path -LiteralPath $root) {
+        Get-ChildItem -LiteralPath $root -Recurse -File | Where-Object {
+          $forbiddenModelFiles -contains $_.Name -or $_.FullName -match '[\\/]models[\\/]fastembed[\\/]'
+        }
+      }
+    }
+  )
+  if ($bundledModelFiles.Count -gt 0) {
+    throw "Runtime model files must not be bundled in the installer: $($bundledModelFiles.FullName -join ', ')"
+  }
+
   $runningApps = @(Get-Process -Name "scrypuppy" -ErrorAction SilentlyContinue)
   if ($runningApps.Count -gt 0) {
     throw "Close every running ScryPuppy instance before building so the release startup check can run."

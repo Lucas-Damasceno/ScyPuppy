@@ -1127,10 +1127,12 @@
 .lite-magic-panel > header > div { display: grid; gap: 1px; }
 .lite-magic-panel > header strong { font-size: 13px; }
 .lite-magic-panel > header small { color: var(--lite-muted); font-size: 9px; }
+.lite-magic-panel > header .lite-beta-badge { display: inline-flex; margin-left: 5px; padding: 2px 5px; border-radius: 999px; background: color-mix(in srgb, var(--lite-accent) 14%, transparent); color: var(--lite-accent); font-size: 7px; letter-spacing: .08em; text-transform: uppercase; vertical-align: middle; }
 .lite-magic-modes { display: flex; gap: 4px; margin: 0 18px 9px; }
 .lite-magic-form { display: grid; grid-template-columns: 19px 1fr auto; align-items: center; gap: 9px; margin: 0 18px; padding: 8px 8px 8px 13px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-search); background: var(--lite-panel); color: var(--lite-muted); box-shadow: 0 7px 20px var(--lite-shadow); }
 .lite-magic-form:focus-within { border-color: var(--lite-focus-border); box-shadow: var(--lite-focus-ring); }
 .lite-magic-form input { min-width: 0; border: 0; outline: 0; background: transparent; color: var(--lite-text); font: inherit; font-size: 13px; }
+.lite-magic-form input:disabled { opacity: .55; cursor: not-allowed; }
 .lite-magic-form > button { display: inline-flex; width: auto; min-width: 58px; height: var(--ui-icon-button-size); align-items: center; justify-content: center; gap: 5px; padding: 0 10px; border: 0; border-radius: var(--ui-radius-control); background: var(--lite-accent); color: #fff; font: inherit; font-size: 10px; font-weight: 720; cursor: pointer; }
 .lite-magic-form > button:disabled { opacity: .38; cursor: default; }
 .lite-document-scope { display: grid; grid-template-columns: minmax(135px, .8fr) minmax(120px, .7fr) 1fr; align-items: end; gap: 8px; margin: 9px 18px 0; }
@@ -1147,6 +1149,11 @@
 .lite-direct-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .lite-direct-actions button { min-height: var(--ui-control-height-default); padding: 0 11px; border-radius: var(--ui-radius-control); }
 .lite-direct-actions button.is-primary { border-color: var(--lite-accent); background: var(--lite-accent); color: #fff; }
+.lite-direct-sources { display: grid; min-height: 0; gap: 7px; padding-top: 12px; border-top: 1px solid var(--lite-border); }
+.lite-direct-sources-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 7px; color: var(--lite-text); font-size: 9px; font-weight: 700; }
+.lite-direct-sources-title small { display: grid; min-width: 18px; height: 18px; place-items: center; padding: 0 5px; border-radius: 999px; background: var(--lite-control); color: var(--lite-muted); font-size: 8px; font-weight: 650; }
+.lite-direct-sources .lite-document-source-list { max-height: 250px; padding-bottom: 0; }
+.lite-direct-sources .lite-document-source-open { padding-right: 7px; }
 .lite-document-created { display: grid; min-height: 100%; align-content: center; justify-items: center; gap: 15px; padding: 24px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-card); background: var(--lite-panel); text-align: center; }
 .lite-document-created-icon { display: grid; width: 50px; height: 50px; place-items: center; border-radius: 16px; background: var(--lite-accent-soft); color: var(--lite-accent); }
 .lite-document-created h2 { max-width: 480px; margin: 5px 0 7px; font-size: 20px; line-height: 1.25; }

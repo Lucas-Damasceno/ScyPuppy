@@ -3,10 +3,10 @@ import * as api from "../../api/tauri";
 import { formatAppError, formatAppMessage } from "../../appMessages";
 import { BrandMark } from "../../components/BrandMark";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
-import { normalizeLanguage, translate, type AppLanguage } from "../../i18n";
-import type { Capture, Context, MagicSearchDocument, MagicSearchPreview } from "../../types";
+import { normalizeLanguage, translate, translateLegacyGeneratedContent, type AppLanguage } from "../../i18n";
+import type { Capture, Context, LocalSearchStatus, MagicSearchDocument, MagicSearchPreview, Settings } from "../../types";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
-import { cleanMagicAnswer, maskSensitive } from "./formatters";
+import { cleanMagicAnswer, formatRelativeDate, maskSensitive } from "./formatters";
 import { LiteEmpty } from "./LiteEmpty";
 import { LiteIcon } from "./LiteIcon";
 
@@ -28,6 +28,8 @@ export function LiteMagicPalette() {
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [detail, setDetail] = useState<Capture | null>(null);
   const [language, setLanguage] = useState<AppLanguage>("en");
+  const [magicEngine, setMagicEngine] = useState<"local" | "provider">("local");
+  const [localStatus, setLocalStatus] = useState<LocalSearchStatus | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [revealed, setRevealed] = useState(false);
@@ -37,10 +39,14 @@ export function LiteMagicPalette() {
   const contextRef = useRef(selectedContextId);
   const periodRef = useRef(period);
   const searchRequestId = useRef(0);
+  const magicEngineRef = useRef(magicEngine);
+  const localStatusRef = useRef(localStatus);
   queryRef.current = query;
   modeRef.current = mode;
   contextRef.current = selectedContextId;
   periodRef.current = period;
+  magicEngineRef.current = magicEngine;
+  localStatusRef.current = localStatus;
   const tr = useCallback((english: string, variables?: Record<string, string | number>) => translate(language, english, variables), [language]);
 
   const refreshContexts = useCallback(async () => {
@@ -57,6 +63,7 @@ export function LiteMagicPalette() {
   const runSearch = useCallback(async (queryOverride?: string, modeOverride?: MagicPaletteMode) => {
     const cleanQuery = (queryOverride ?? queryRef.current).trim();
     if (!cleanQuery) return;
+    if (magicEngineRef.current === "local" && localStatusRef.current?.phase !== "ready") return;
     const selectedMode = modeOverride ?? modeRef.current;
     const currentRequest = ++searchRequestId.current;
     setIsLoading(true);
@@ -80,7 +87,11 @@ export function LiteMagicPalette() {
 
   useEffect(() => {
     globalThis.document.documentElement.classList.add("lite-magic-window");
-    api.getSettings().then((settings) => setLanguage(normalizeLanguage(settings.language))).catch(() => undefined);
+    api.getSettings().then((settings) => {
+      setLanguage(normalizeLanguage(settings.language));
+      setMagicEngine(settings.magic_search_engine);
+    }).catch(() => undefined);
+    api.getLocalSearchStatus().then(setLocalStatus).catch(() => undefined);
     void refreshContexts().catch(() => undefined);
     inputRef.current?.focus();
     return () => globalThis.document.documentElement.classList.remove("lite-magic-window");
@@ -108,6 +119,11 @@ export function LiteMagicPalette() {
   });
 
   useTauriEvent("data-reset", () => void refreshContexts().catch(() => undefined));
+  useTauriEvent<Settings>("settings-updated", ({ payload }) => {
+    setLanguage(normalizeLanguage(payload.language));
+    setMagicEngine(payload.magic_search_engine);
+  });
+  useTauriEvent<LocalSearchStatus>("local-search-status-changed", ({ payload }) => setLocalStatus(payload));
 
   useEffect(() => {
     const handleEscape = (event: KeyboardEvent) => {
@@ -120,7 +136,7 @@ export function LiteMagicPalette() {
   }, [detail]);
 
   useEffect(() => {
-    if (mode !== "document" || !query.trim()) {
+    if (mode !== "document" || !query.trim() || (magicEngine === "local" && localStatus?.phase !== "ready")) {
       setPreview(null);
       setIsPreviewLoading(false);
       return;
@@ -137,7 +153,9 @@ export function LiteMagicPalette() {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [mode, period, query, selectedContextId]);
+  }, [localStatus?.phase, magicEngine, mode, period, query, selectedContextId]);
+
+  const localUnavailable = magicEngine === "local" && localStatus?.phase !== "ready";
 
   const answer = document?.answer_value ?? cleanMagicAnswer(document?.markdown ?? "");
   const visibleAnswer = document?.sensitive_value && !revealed
@@ -145,9 +163,7 @@ export function LiteMagicPalette() {
     : document?.sensitive_value ?? answer;
   const copyAnswer = document?.sensitive_value ?? answer;
 
-  async function openEvidence() {
-    const captureId = document?.evidence[0]?.capture_id;
-    if (!captureId) return;
+  async function openEvidence(captureId: string) {
     try {
       setDetail(await api.getCapture(captureId));
     } catch (reason) {
@@ -168,7 +184,7 @@ export function LiteMagicPalette() {
         <header>
           <span className="lite-brand-mark"><BrandMark /></span>
           <div>
-            <strong>{tr("Ask ScryPuppy")}</strong>
+            <strong>{tr("Ask ScryPuppy")} {magicEngine === "local" && <small className="lite-beta-badge">{tr("Local beta")}</small>}</strong>
             <small>{tr(mode === "document" ? "Condense a subject into an editable document" : "Get only the answer you need")}</small>
           </div>
           <button className="lite-icon-button" onClick={() => void api.closeMagicSearchWindow()} aria-label={tr("Close")}><LiteIcon name="close" /></button>
@@ -185,8 +201,8 @@ export function LiteMagicPalette() {
 
         <form className="lite-magic-form" onSubmit={(event) => { event.preventDefault(); void runSearch(); }}>
           <LiteIcon name="search" />
-          <input ref={inputRef} value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder={tr(mode === "document" ? "What subject should be condensed?" : "What are you looking for?")} aria-label={tr("Magic Search")} />
-          <button type="submit" disabled={!query.trim() || isLoading || (mode === "document" && preview?.evidence_count === 0)} aria-label={tr("Ask ScryPuppy")}>
+          <input ref={inputRef} disabled={localUnavailable} value={query} onChange={(event) => setQuery(event.currentTarget.value)} placeholder={tr(mode === "document" ? "What subject should be condensed?" : "What are you looking for?")} aria-label={tr("Magic Search")} />
+          <button type="submit" disabled={localUnavailable || !query.trim() || isLoading || (mode === "document" && preview?.evidence_count === 0)} aria-label={tr("Ask ScryPuppy")}>
             <LiteIcon name="sparkles" size={13} /><span>{tr("Ask")}</span>
           </button>
         </form>
@@ -219,7 +235,15 @@ export function LiteMagicPalette() {
         </div>}
 
         <div className="lite-magic-body">
-          {isLoading ? (
+          {localUnavailable ? (
+            <LiteEmpty
+              icon={localStatus?.phase === "downloading" || localStatus?.phase === "indexing" ? "loader" : "info"}
+              title={tr(localStatus?.phase === "indexing" ? "Preparing local search..." : localStatus?.phase === "downloading" ? "Downloading the local model..." : "Local Magic Search is not ready")}
+              description={localStatus?.phase === "indexing"
+                ? tr("Indexed {indexed} of {total} captures.", { indexed: localStatus.indexed_count, total: localStatus.total_count })
+                : tr("Download Multilingual E5 Small in Settings, then wait for your library to be indexed.")}
+            />
+          ) : isLoading ? (
             <LiteEmpty icon="loader" title={tr(mode === "document" ? "Gathering and condensing evidence..." : "Searching your captures...")} description={tr("ScryPuppy is checking the most relevant evidence.")} />
           ) : error ? (
             <LiteEmpty icon="info" title={tr("No answer found")} description={error} />
@@ -244,8 +268,25 @@ export function LiteMagicPalette() {
               <div className="lite-direct-actions">
                 {document.sensitive_value && <button onClick={() => setRevealed((value) => !value)}><LiteIcon name="eye" />{tr(revealed ? "Hide" : "Reveal")}</button>}
                 <button className="is-primary" onClick={() => api.copyTextToClipboard(copyAnswer).catch((reason) => setError(formatAppError(reason, tr)))}><LiteIcon name="copy" />{tr("Copy")}</button>
-                <button onClick={() => void openEvidence()}><LiteIcon name="info" />{tr("View source")}</button>
               </div>
+              <section className="lite-direct-sources" aria-labelledby="lite-direct-sources-title">
+                <div className="lite-direct-sources-title">
+                  <span id="lite-direct-sources-title">{tr("Evidence used")}</span>
+                  <small>{Math.min(document.evidence.length, 5)}</small>
+                </div>
+                <div className="lite-document-source-list">
+                  {document.evidence.slice(0, 5).map((source, index) => <div className="lite-document-source-item" key={source.capture_id}>
+                    <button className="lite-document-source-open" onClick={() => void openEvidence(source.capture_id)}>
+                      <span>{index + 1}</span>
+                      <div>
+                        <strong>{source.app_name || tr("Unknown application")}</strong>
+                        <small>{source.window_title || formatRelativeDate(source.captured_at, language)}</small>
+                        <p>{translateLegacyGeneratedContent(language, source.excerpt)}</p>
+                      </div>
+                    </button>
+                  </div>)}
+                </div>
+              </section>
             </div>
           ) : mode === "document" ? (
             <LiteEmpty icon="file" title={tr("Turn your captures into a useful document")} description={tr("Describe a subject and ScryPuppy will organize the related information with numbered sources.")} />
@@ -254,7 +295,7 @@ export function LiteMagicPalette() {
           )}
         </div>
 
-        <footer><kbd>Esc</kbd><span>{tr("close")}</span><span className="lite-footer-spacer" /><span>{tr("Your data stays on this computer")}</span></footer>
+        <footer><kbd>Esc</kbd><span>{tr("close")}</span><span className="lite-footer-spacer" /><span>{tr(magicEngine === "local" ? "Processed on this computer · captures are not sent" : "Selected evidence may be sent to your AI provider")}</span></footer>
       </section>
 
       {detail && <CaptureDetailsDialog capture={detail} contexts={[]} language={language} readOnly onClose={() => setDetail(null)} onChanged={async () => undefined} onError={setError} />}
