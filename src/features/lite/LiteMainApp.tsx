@@ -12,7 +12,7 @@ import { captureDisplayText, normalizeLanguage, translate } from "../../i18n";
 import type { AiProviderOption, Capture } from "../../types";
 import { AddItemsToContextDialog } from "./AddItemsToContextDialog";
 import { CaptureDetailsDialog } from "./CaptureDetailsDialog";
-import { appInitial, compactContent, formatHotkey, formatRelativeDate } from "./formatters";
+import { appInitial, compactContent, emptyCapturePrompt, formatHotkey, formatRelativeDate } from "./formatters";
 import { LiteEmpty } from "./LiteEmpty";
 import { LiteDocumentsWorkspace } from "./LiteDocumentsWorkspace";
 import { LiteIcon } from "./LiteIcon";
@@ -92,6 +92,11 @@ export function LiteMainApp() {
   const capturePageCount = Math.max(1, Math.ceil(captureTotal / capturePageSize));
   const captureRangeStart = captureTotal === 0 ? 0 : (capturePage * capturePageSize) + 1;
   const captureRangeEnd = captureTotal === 0 ? 0 : Math.min(captureRangeStart + captures.length - 1, captureTotal);
+  const emptyPrompt = emptyCapturePrompt(
+    selectedContextId === knowledgeBaseId,
+    settings.hotkey,
+    settings.reference_hotkey,
+  );
 
   useEffect(() => {
     document.documentElement.lang = language;
@@ -340,7 +345,7 @@ export function LiteMainApp() {
           {isLoading && captures.length === 0 ? (
             <LiteEmpty icon="loader" title={tr("Loading your history...")} />
           ) : captures.length === 0 ? (
-            <LiteEmpty icon="copy" title={tr("Nothing found")} description={tr("Copy something with Ctrl + Shift + C or try another search.")} />
+            <LiteEmpty icon="copy" title={tr("Nothing found")} description={tr(emptyPrompt.message, { shortcut: emptyPrompt.shortcut })} />
           ) : captures.map((capture) => {
             const imageAsset = capture.assets.find((asset) =>
               asset.path && ["clipboard_image", "imported_image"].includes(asset.kind),

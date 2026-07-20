@@ -29,6 +29,18 @@ export function formatHotkey(value?: string) {
   return (value ?? "").replace("CommandOrControl", "Ctrl").replace(/\+/g, " + ");
 }
 
+export function emptyCapturePrompt(isKnowledgeBase: boolean, captureHotkey?: string, referenceHotkey?: string) {
+  return isKnowledgeBase
+    ? {
+        message: "Save a reference with {shortcut} or try another search.",
+        shortcut: formatHotkey(referenceHotkey),
+      }
+    : {
+        message: "Copy something with {shortcut} or try another search.",
+        shortcut: formatHotkey(captureHotkey),
+      };
+}
+
 export function cleanMagicAnswer(markdown: string) {
   return markdown
     .replace(/\[capture:[^\]]+\]/gi, "")
