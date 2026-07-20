@@ -5,13 +5,14 @@ import {
   AiControls,
   ClipboardCaptureControls,
   QuickContextControls,
+  RetentionControls,
   SettingsSaveFeedback,
   StartupAndShortcutsControls,
 } from "../../components/SettingsControls";
 import type { SettingsSaveState } from "../../hooks/useSettingsCoordinator";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
 import { normalizeLanguage, translate, type AppLanguage } from "../../i18n";
-import type { AiProviderOption, LocalSearchStatus, Settings } from "../../types";
+import type { AiProviderOption, LocalSearchStatus, RetentionApplyResult, Settings } from "../../types";
 import { AppUpdateSettings } from "../updates/AppUpdateNotice";
 import type { AppUpdaterController } from "../updates/useAppUpdater";
 import { LiteIcon } from "./LiteIcon";
@@ -27,12 +28,13 @@ type LiteSettingsDialogProps = {
   onClearCredential: () => Promise<void>;
   onRetry: () => void;
   onDeleteAll: () => Promise<void>;
+  onRetentionApplied: (result: RetentionApplyResult) => Promise<void>;
   onClose: () => void;
   onOpenTutorial: () => void;
   onStatus: (message: string | null) => void;
 };
 
-export function LiteSettingsDialog({ settings, aiOptions, language, updater, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
+export function LiteSettingsDialog({ settings, aiOptions, language, updater, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onRetentionApplied, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
   const tr = (english: string, variables?: MessageParams) => translate(language, english, variables);
   const [localStatus, setLocalStatus] = useState<LocalSearchStatus | null>(null);
   const [localActionPending, setLocalActionPending] = useState(false);
@@ -84,45 +86,27 @@ export function LiteSettingsDialog({ settings, aiOptions, language, updater, sav
           </section>
           <AppUpdateSettings updater={updater} language={language} />
           <section className="settings-group magic-engine-settings">
-            <div className="settings-group-title"><LiteIcon name="search" /><div><strong>{tr("Magic Search")}</strong><span>{tr("Choose how evidence is retrieved and answers are generated")}</span></div></div>
+            <div className="settings-group-title"><LiteIcon name="search" /><div><strong>{tr("Semantic search")}</strong><span>{tr("E5 and exact text rank Magic Search results locally")}</span></div></div>
             <div className="settings-control-stack magic-engine-control-stack">
-              <div className="magic-engine-options" role="radiogroup" aria-label={tr("Magic Search")}>
-                <button type="button" role="radio" aria-checked={settings.magic_search_engine === "local"} className={`magic-engine-card ${settings.magic_search_engine === "local" ? "is-selected" : ""}`} onClick={() => void onPatch({ magic_search_engine: "local" })}>
-                  <span className="settings-radio-indicator" aria-hidden="true"><span /></span>
-                  <span className="magic-engine-card-copy">
-                    <span className="magic-engine-card-title"><LiteIcon name="lock" /><strong>{tr("Local beta")}</strong><span>{tr("Beta")}</span></span>
-                    <small>{tr("Multilingual semantic search and local answers. Captures never leave this computer.")}</small>
-                  </span>
-                </button>
-                <button type="button" role="radio" aria-checked={settings.magic_search_engine === "provider"} className={`magic-engine-card ${settings.magic_search_engine === "provider" ? "is-selected" : ""}`} onClick={() => void onPatch({ magic_search_engine: "provider" })}>
-                  <span className="settings-radio-indicator" aria-hidden="true"><span /></span>
-                  <span className="magic-engine-card-copy">
-                    <span className="magic-engine-card-title"><LiteIcon name="sparkles" /><strong>{tr("AI provider")}</strong></span>
-                    <small>{tr("Searches your local evidence, then may send selected evidence to the configured provider.")}</small>
-                  </span>
-                </button>
-              </div>
-              {settings.magic_search_engine === "local" && <>
-                <div className="local-model-status">
-                  <span className="settings-control-copy">
-                    <strong>{localStatus?.model_name ?? "Multilingual E5 Small"}</strong>
-                    <small>
-                      {localStatus ? localPhaseLabel(localStatus, tr) : tr("Checking local model...")}
-                      {localStatus && localStatus.cache_bytes > 0 && <>{" \u00b7 "}{formatBytes(localStatus.cache_bytes)} {tr("on disk")}</>}
-                    </small>
-                  </span>
-                  <div className="local-model-actions">
-                    {(localStatus?.can_download || localStatus?.can_retry) && <button className="settings-inline-button" disabled={localActionPending} onClick={() => void prepareLocalSearch()}><LiteIcon name="refresh" />{tr(localStatus.can_retry ? "Retry download" : "Download model")}</button>}
-                    {localStatus?.can_remove && <button className="settings-inline-button is-danger" disabled={localActionPending || localStatus.phase === "downloading" || localStatus.phase === "indexing" || localStatus.phase === "removing"} onClick={() => void removeLocalModel()}><LiteIcon name="trash" />{tr("Remove model")}</button>}
-                  </div>
+              <div className="local-model-status">
+                <span className="settings-control-copy">
+                  <strong>{localStatus?.model_name ?? "Multilingual E5 Small"}</strong>
+                  <small>
+                    {localStatus ? localPhaseLabel(localStatus, tr) : tr("Checking local model...")}
+                    {localStatus && localStatus.cache_bytes > 0 && <>{" \u00b7 "}{formatBytes(localStatus.cache_bytes)} {tr("on disk")}</>}
+                  </small>
+                </span>
+                <div className="local-model-actions">
+                  {(localStatus?.can_download || localStatus?.can_retry) && <button className="settings-inline-button" disabled={localActionPending} onClick={() => void prepareLocalSearch()}><LiteIcon name="refresh" />{tr(localStatus.can_retry ? "Retry download" : "Download model")}</button>}
+                  {localStatus?.can_remove && <button className="settings-inline-button is-danger" disabled={localActionPending || localStatus.phase === "downloading" || localStatus.phase === "indexing" || localStatus.phase === "removing"} onClick={() => void removeLocalModel()}><LiteIcon name="trash" />{tr("Remove model")}</button>}
                 </div>
-                {localStatus?.phase === "indexing" && localStatus.total_count > 0 && <div className="local-model-progress"><progress value={localStatus.indexed_count} max={localStatus.total_count} /></div>}
-                {localStatus?.error && <p className="settings-dependency-hint is-error">{formatAppMessage(localStatus.error, tr)}</p>}
-              </>}
+              </div>
+              {localStatus?.phase === "indexing" && localStatus.total_count > 0 && <div className="local-model-progress"><progress value={localStatus.indexed_count} max={localStatus.total_count} /></div>}
+              {localStatus?.error && <p className="settings-dependency-hint is-error">{formatAppMessage(localStatus.error, tr)}</p>}
             </div>
           </section>
           <section className="settings-group ai-settings-group">
-            <div className="settings-group-title"><LiteIcon name="sparkles" /><div><strong>{tr("Artificial intelligence")}</strong><span>{tr("Optional provider for better direct answers")}</span></div></div>
+            <div className="settings-group-title"><LiteIcon name="sparkles" /><div><strong>{tr("Document creation")}</strong><span>{tr("A configured AI provider is required to create documents")}</span></div></div>
             <AiControls settings={settings} options={aiOptions} tr={tr} onPatch={onPatch} onSaveCredential={(value) => onPatch({ ai_api_key: value })} onClearCredential={onClearCredential} />
           </section>
           <section className="settings-group">
@@ -135,6 +119,7 @@ export function LiteSettingsDialog({ settings, aiOptions, language, updater, sav
           </section>
           <section className="settings-group">
             <div className="settings-group-title"><LiteIcon name="lock" /><div><strong>{tr("Protected local data")}</strong><span>{tr("Your history is encrypted on this computer")}</span></div></div>
+            <RetentionControls settings={settings} tr={tr} onApplied={onRetentionApplied} onStatus={(message) => onStatus(message)} />
             <div className="storage-path"><LiteIcon name="folder" /><code>{settings.data_dir || tr("Loading...")}</code></div>
             <div className="settings-actions">
               <button className="secondary-button wide" onClick={() => api.resyncContexts().then(() => onStatus(tr("Data resynchronized."))).catch((error) => onStatus(formatAppError(error, tr)))}><LiteIcon name="refresh" />{tr("Resynchronize data")}</button>

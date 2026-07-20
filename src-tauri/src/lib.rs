@@ -56,7 +56,7 @@ use local_search::{
 use winreg::{enums::HKEY_CURRENT_USER, RegKey};
 
 const INBOX_CONTEXT_ID: &str = "inbox";
-const CONTENT_BASE_CONTEXT_ID: &str = "content-base";
+const KNOWLEDGE_BASE_CONTEXT_ID: &str = "knowledge-base";
 const HOTKEY: &str = "CommandOrControl+Shift+C";
 const REFERENCE_HOTKEY: &str = "CommandOrControl+Shift+S";
 const PASTE_HOTKEY: &str = "CommandOrControl+Shift+V";
@@ -67,6 +67,12 @@ const CREDENTIAL_SERVICE: &str = "Scryppy";
 const DATABASE_KEY_CREDENTIAL: &str = "database-key-v1";
 const CONTEXT_KEY_CREDENTIAL: &str = "context-key-v1";
 const AI_KEY_CREDENTIAL: &str = "ai-api-key-v1";
+const DEFAULT_RETENTION_POLICY: &str = "3_months";
+const RETENTION_CHECK_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+
+fn default_retention_policy() -> String {
+    DEFAULT_RETENTION_POLICY.into()
+}
 
 fn default_quick_context_enabled() -> bool {
     true
@@ -343,7 +349,7 @@ struct CaptureFilter {
     exclude_references: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct SettingsDto {
     capture_screenshots: bool,
     launch_at_startup: bool,
@@ -376,6 +382,8 @@ struct SettingsDto {
     clipboard_monitor_capture_screenshots: bool,
     #[serde(default = "default_clipboard_monitor_quick_context_enabled")]
     clipboard_monitor_quick_context_enabled: bool,
+    #[serde(default = "default_retention_policy")]
+    retention_policy: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -399,6 +407,14 @@ struct ChatAnswer {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 struct MagicSearchRequest {
     query: String,
+    #[serde(default)]
+    context_ids: Vec<String>,
+    #[serde(default)]
+    include_knowledge_base: Option<bool>,
+    #[serde(default)]
+    include_inbox: Option<bool>,
+    // Kept only to deserialize filters saved by older versions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     context_id: Option<String>,
     tag: Option<String>,
     date_from: Option<String>,
@@ -407,6 +423,20 @@ struct MagicSearchRequest {
     previous_document_id: Option<String>,
     #[serde(default)]
     response_mode: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct MagicSearchItemsRequest {
+    query: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct MagicSearchItemsPageDto {
+    items: Vec<EvidenceItem>,
+    total: usize,
+    has_more: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -452,6 +482,14 @@ struct MagicSearchListItemDto {
 struct MagicSearchPreviewDto {
     evidence_count: usize,
     available_count: usize,
+    batch_count: usize,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct DocumentGenerationProgressDto {
+    phase: String,
+    completed: usize,
+    total: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -647,10 +685,28 @@ struct DataCleanupResult {
 }
 
 #[derive(Debug, Serialize)]
+struct RetentionPreview {
+    selection_token: String,
+    capture_count: usize,
+    image_count: usize,
+    file_count: usize,
+    reclaimable_bytes: u64,
+    oldest_captured_at: Option<String>,
+    newest_captured_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct RetentionApplyResult {
+    settings: SettingsDto,
+    deleted_count: usize,
+    reclaimed_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
 struct LibraryCounts {
     all: i64,
     inbox: i64,
-    content_base: i64,
+    knowledge_base: i64,
 }
 
 struct LocalAnalysis {
@@ -685,7 +741,7 @@ async fn save_reference(app: AppHandle, state: State<'_, AppState>) -> CommandRe
     let state = state.inner().clone();
     command_result(
         tauri::async_runtime::spawn_blocking(move || {
-            run_capture_core(&app, state, "reference", CONTENT_BASE_CONTEXT_ID)
+            run_capture_core(&app, state, "reference", KNOWLEDGE_BASE_CONTEXT_ID)
         })
         .await
         .map_err(err)?,
@@ -739,7 +795,7 @@ fn capture_query_parts(filter: &CaptureFilter) -> CaptureQueryParts {
     {
         if context_id == INBOX_CONTEXT_ID {
             where_parts.push("c.capture_kind <> 'reference' AND NOT EXISTS (SELECT 1 FROM capture_contexts icc WHERE icc.capture_id = c.id)".to_string());
-        } else if context_id == CONTENT_BASE_CONTEXT_ID {
+        } else if context_id == KNOWLEDGE_BASE_CONTEXT_ID {
             where_parts.push("c.capture_kind = 'reference'".to_string());
         } else {
             where_parts.push("EXISTS (SELECT 1 FROM capture_contexts fcc WHERE fcc.capture_id = c.id AND fcc.context_id = ?)".to_string());
@@ -967,7 +1023,7 @@ fn list_contexts(state: State<AppState>) -> CommandResult<Vec<ContextDto>> {
                     COUNT(cc.capture_id) AS capture_count
              FROM contexts co
              LEFT JOIN capture_contexts cc ON cc.context_id = co.id
-             WHERE co.id NOT IN ('inbox', 'content-base')
+             WHERE co.id NOT IN ('inbox', 'knowledge-base')
              GROUP BY co.id
              ORDER BY lower(co.name)",
         )
@@ -995,16 +1051,16 @@ fn list_contexts(state: State<AppState>) -> CommandResult<Vec<ContextDto>> {
 fn get_library_counts(state: State<AppState>) -> CommandResult<LibraryCounts> {
     let conn = open_conn(&state)?;
     command_result(conn.query_row(
-        "SELECT COUNT(*),
+        "SELECT SUM(CASE WHEN capture_kind <> 'reference' THEN 1 ELSE 0 END),
                 SUM(CASE WHEN capture_kind <> 'reference' AND NOT EXISTS
                     (SELECT 1 FROM capture_contexts cc WHERE cc.capture_id = captures.id) THEN 1 ELSE 0 END),
                 SUM(CASE WHEN capture_kind = 'reference' THEN 1 ELSE 0 END)
          FROM captures",
         [],
         |row| Ok(LibraryCounts {
-            all: row.get(0)?,
+            all: row.get::<_, Option<i64>>(0)?.unwrap_or(0),
             inbox: row.get::<_, Option<i64>>(1)?.unwrap_or(0),
-            content_base: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
+            knowledge_base: row.get::<_, Option<i64>>(2)?.unwrap_or(0),
         }),
     ).map_err(err))
 }
@@ -1074,7 +1130,7 @@ fn cleanup_candidate_ids(
     {
         if context_id == INBOX_CONTEXT_ID {
             clauses.push("c.capture_kind <> 'reference' AND NOT EXISTS (SELECT 1 FROM capture_contexts inbox_cc WHERE inbox_cc.capture_id = c.id)".to_string());
-        } else if context_id == CONTENT_BASE_CONTEXT_ID {
+        } else if context_id == KNOWLEDGE_BASE_CONTEXT_ID {
             clauses.push("c.capture_kind = 'reference'".to_string());
         } else {
             clauses.push("EXISTS (SELECT 1 FROM capture_contexts context_cc WHERE context_cc.capture_id = c.id AND context_cc.context_id = ?)".to_string());
@@ -1225,7 +1281,7 @@ async fn preview_data_cleanup(
             if let Some(context_id) = filter
                 .context_id
                 .as_deref()
-                .filter(|id| !matches!(*id, INBOX_CONTEXT_ID | CONTENT_BASE_CONTEXT_ID))
+                .filter(|id| !matches!(*id, INBOX_CONTEXT_ID | KNOWLEDGE_BASE_CONTEXT_ID))
             {
                 validate_user_context_exists(&conn, context_id).map_err(|error| error.code)?;
             }
@@ -1234,6 +1290,45 @@ async fn preview_data_cleanup(
         .await
         .map_err(err)?,
     )
+}
+
+fn delete_capture_ids_from_conn(
+    conn: &mut Connection,
+    state: &AppState,
+    ids: &[String],
+) -> Result<DataCleanupResult, String> {
+    let reclaimed_bytes = cleanup_reclaimable_bytes(conn, state, ids)?;
+    let context_ids = ids.iter().try_fold(HashSet::new(), |mut all, id| {
+        for context_id in context_ids_for_capture(conn, id)? {
+            all.insert(context_id);
+        }
+        Ok::<_, String>(all)
+    })?;
+    let assets = ids.iter().try_fold(Vec::new(), |mut all, id| {
+        all.extend(assets_for_capture(conn, id)?);
+        Ok::<_, String>(all)
+    })?;
+    let transaction = conn.transaction().map_err(err)?;
+    for id in ids {
+        transaction
+            .execute("DELETE FROM captures WHERE id = ?", [id])
+            .map_err(err)?;
+    }
+    transaction.commit().map_err(err)?;
+    for asset in assets {
+        if let Some(path) = asset.path {
+            let _ = secure_remove_file(Path::new(&path));
+        }
+    }
+    for id in ids {
+        let _ = secure_remove_dir(&state.clipboard_files_dir().join(id));
+    }
+    let touched = context_ids.into_iter().collect::<Vec<_>>();
+    sync_contexts_best_effort(state, &touched);
+    Ok(DataCleanupResult {
+        deleted_count: ids.len(),
+        reclaimed_bytes,
+    })
 }
 
 #[tauri::command]
@@ -1250,7 +1345,7 @@ async fn delete_data_by_filter(
         if let Some(context_id) = filter
             .context_id
             .as_deref()
-            .filter(|id| !matches!(*id, INBOX_CONTEXT_ID | CONTENT_BASE_CONTEXT_ID))
+            .filter(|id| !matches!(*id, INBOX_CONTEXT_ID | KNOWLEDGE_BASE_CONTEXT_ID))
         {
             validate_user_context_exists(&conn, context_id)?;
         }
@@ -1261,45 +1356,232 @@ async fn delete_data_by_filter(
         }
         let candidates = cleanup_candidate_ids(&conn, &filter).map_err(AppError::from)?;
         let ids = candidates.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
-        let context_ids = ids.iter().try_fold(HashSet::new(), |mut all, id| {
-            for context_id in context_ids_for_capture(&conn, id).map_err(AppError::from)? {
-                all.insert(context_id);
-            }
-            Ok::<_, AppError>(all)
-        })?;
-        let assets = ids.iter().try_fold(Vec::new(), |mut all, id| {
-            all.extend(assets_for_capture(&conn, id).map_err(AppError::from)?);
-            Ok::<_, AppError>(all)
-        })?;
-        let transaction = conn
-            .transaction()
-            .map_err(|error| AppError::from(err(error)))?;
-        for id in &ids {
-            transaction
-                .execute("DELETE FROM captures WHERE id = ?", [id])
-                .map_err(|error| AppError::from(err(error)))?;
-        }
-        transaction
-            .commit()
-            .map_err(|error| AppError::from(err(error)))?;
-        for asset in assets {
-            if let Some(path) = asset.path {
-                let _ = secure_remove_file(Path::new(&path));
-            }
-        }
-        for id in &ids {
-            let _ = secure_remove_dir(&state.clipboard_files_dir().join(id));
-        }
-        let touched = context_ids.into_iter().collect::<Vec<_>>();
-        sync_contexts_best_effort(&state, &touched);
-        Ok(DataCleanupResult {
-            deleted_count: ids.len(),
-            reclaimed_bytes: preview.reclaimable_bytes,
-        })
+        delete_capture_ids_from_conn(&mut conn, &state, &ids).map_err(AppError::from)
     })
     .await
     .map_err(err)??;
     app.emit("data-reset", Value::Null).map_err(err)?;
+    Ok(result)
+}
+
+fn retention_policy_is_valid(policy: &str) -> bool {
+    matches!(
+        policy,
+        "1_day" | "3_days" | "7_days" | "1_month" | "3_months" | "6_months" | "12_months" | "never"
+    )
+}
+
+fn retention_cutoff_at(policy: &str, at: DateTime<Utc>) -> Result<Option<DateTime<Utc>>, String> {
+    if !retention_policy_is_valid(policy) {
+        return Err("Invalid retention policy".into());
+    }
+    let cutoff = match policy {
+        "1_day" => at.checked_sub_signed(chrono::TimeDelta::days(1)),
+        "3_days" => at.checked_sub_signed(chrono::TimeDelta::days(3)),
+        "7_days" => at.checked_sub_signed(chrono::TimeDelta::days(7)),
+        "1_month" => at.checked_sub_months(chrono::Months::new(1)),
+        "3_months" => at.checked_sub_months(chrono::Months::new(3)),
+        "6_months" => at.checked_sub_months(chrono::Months::new(6)),
+        "12_months" => at.checked_sub_months(chrono::Months::new(12)),
+        "never" => return Ok(None),
+        _ => unreachable!(),
+    };
+    cutoff
+        .map(Some)
+        .ok_or_else(|| "Could not calculate retention cutoff".into())
+}
+
+fn retention_candidate_ids(
+    conn: &Connection,
+    policy: &str,
+    policy_started_at: Option<&str>,
+    at: DateTime<Utc>,
+) -> Result<Vec<(String, String)>, String> {
+    let Some(cutoff) = retention_cutoff_at(policy, at)? else {
+        return Ok(Vec::new());
+    };
+    let cutoff = cutoff.to_rfc3339();
+    let mut candidates = Vec::new();
+    if let Some(started_at) = policy_started_at.filter(|value| !value.trim().is_empty()) {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, captured_at FROM captures
+                 WHERE capture_kind <> 'reference'
+                   AND COALESCE(json_extract(metadata_json, '$.capture_origin'), 'explicit_hotkey') <> 'file_import'
+                   AND captured_at < ?1 AND captured_at >= ?2
+                 ORDER BY captured_at DESC, id DESC",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map(params![cutoff, started_at], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .map_err(err)?;
+        for row in rows {
+            candidates.push(row.map_err(err)?);
+        }
+    } else {
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, captured_at FROM captures
+                 WHERE capture_kind <> 'reference'
+                   AND COALESCE(json_extract(metadata_json, '$.capture_origin'), 'explicit_hotkey') <> 'file_import'
+                   AND captured_at < ?1
+                 ORDER BY captured_at DESC, id DESC",
+            )
+            .map_err(err)?;
+        let rows = stmt
+            .query_map([cutoff], |row| Ok((row.get(0)?, row.get(1)?)))
+            .map_err(err)?;
+        for row in rows {
+            candidates.push(row.map_err(err)?);
+        }
+    }
+    Ok(candidates)
+}
+
+fn retention_preview_from_conn(
+    conn: &Connection,
+    state: &AppState,
+    policy: &str,
+    at: DateTime<Utc>,
+) -> Result<RetentionPreview, String> {
+    let candidates = retention_candidate_ids(conn, policy, None, at)?;
+    let ids = candidates
+        .iter()
+        .map(|(id, _)| id.clone())
+        .collect::<Vec<_>>();
+    let selection_token = sha256_hex(format!("{policy}\n{}", ids.join("\n")).as_bytes());
+    let mut image_count = 0;
+    let mut file_count = 0;
+    for id in &ids {
+        let (has_image, has_files): (i64, i64) = conn
+            .query_row(
+                "SELECT
+                   EXISTS (SELECT 1 FROM capture_representations WHERE capture_id = ?1 AND kind = 'image'),
+                   EXISTS (SELECT 1 FROM capture_representations WHERE capture_id = ?1 AND kind = 'files')",
+                [id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .map_err(err)?;
+        image_count += usize::from(has_image != 0 && has_files == 0);
+        file_count += usize::from(has_files != 0);
+    }
+    Ok(RetentionPreview {
+        selection_token,
+        capture_count: ids.len(),
+        image_count,
+        file_count,
+        reclaimable_bytes: cleanup_reclaimable_bytes(conn, state, &ids)?,
+        oldest_captured_at: candidates.last().map(|(_, date)| date.clone()),
+        newest_captured_at: candidates.first().map(|(_, date)| date.clone()),
+    })
+}
+
+#[tauri::command]
+async fn preview_retention_change(
+    state: State<'_, AppState>,
+    policy: String,
+) -> CommandResult<RetentionPreview> {
+    if !retention_policy_is_valid(&policy) {
+        return Err(AppError::new("retention.invalid_policy"));
+    }
+    let state = state.inner().clone();
+    command_result(
+        tauri::async_runtime::spawn_blocking(move || {
+            let conn = open_conn(&state)?;
+            retention_preview_from_conn(&conn, &state, &policy, Utc::now())
+        })
+        .await
+        .map_err(err)?,
+    )
+}
+
+#[tauri::command]
+async fn apply_retention_change(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    policy: String,
+    existing_action: String,
+    selection_token: String,
+) -> CommandResult<RetentionApplyResult> {
+    if !retention_policy_is_valid(&policy) {
+        return Err(AppError::new("retention.invalid_policy"));
+    }
+    if !matches!(existing_action.as_str(), "delete" | "keep") {
+        return Err(AppError::new("retention.invalid_existing_action"));
+    }
+    let state = state.inner().clone();
+    let result = tauri::async_runtime::spawn_blocking(move || -> CommandResult<_> {
+        let at = Utc::now();
+        let mut conn = open_conn(&state).map_err(AppError::from)?;
+        let preview =
+            retention_preview_from_conn(&conn, &state, &policy, at).map_err(AppError::from)?;
+        if preview.selection_token != selection_token {
+            return Err(AppError::new("retention.selection_changed"));
+        }
+        let deletion = if existing_action == "delete" {
+            let ids = retention_candidate_ids(&conn, &policy, None, at)
+                .map_err(AppError::from)?
+                .into_iter()
+                .map(|(id, _)| id)
+                .collect::<Vec<_>>();
+            delete_capture_ids_from_conn(&mut conn, &state, &ids).map_err(AppError::from)?
+        } else {
+            DataCleanupResult {
+                deleted_count: 0,
+                reclaimed_bytes: 0,
+            }
+        };
+        set_setting(&conn, "retention_policy", &policy).map_err(AppError::from)?;
+        let retention_started_at = if existing_action == "keep" {
+            at.to_rfc3339()
+        } else {
+            "1970-01-01T00:00:00+00:00".into()
+        };
+        set_setting(&conn, "retention_started_at", &retention_started_at)
+            .map_err(AppError::from)?;
+        set_setting(&conn, "retention_last_run_at", &at.to_rfc3339()).map_err(AppError::from)?;
+        let settings = settings_from_conn(&conn, &state).map_err(AppError::from)?;
+        Ok(RetentionApplyResult {
+            settings,
+            deleted_count: deletion.deleted_count,
+            reclaimed_bytes: deletion.reclaimed_bytes,
+        })
+    })
+    .await
+    .map_err(err)??;
+    if result.deleted_count > 0 {
+        app.emit("data-reset", Value::Null).map_err(err)?;
+    }
+    app.emit("settings-updated", result.settings.clone())
+        .map_err(err)?;
+    Ok(result)
+}
+
+fn run_retention_cleanup(state: &AppState, at: DateTime<Utc>) -> Result<DataCleanupResult, String> {
+    let mut conn = open_conn(state)?;
+    if let Some(last_run) = get_setting(&conn, "retention_last_run_at")?
+        .and_then(|value| DateTime::parse_from_rfc3339(&value).ok())
+    {
+        if at.signed_duration_since(last_run.with_timezone(&Utc)) < chrono::TimeDelta::hours(24) {
+            return Ok(DataCleanupResult {
+                deleted_count: 0,
+                reclaimed_bytes: 0,
+            });
+        }
+    }
+    let policy = get_setting(&conn, "retention_policy")?
+        .filter(|value| retention_policy_is_valid(value))
+        .unwrap_or_else(default_retention_policy);
+    let started_at = get_setting(&conn, "retention_started_at")?;
+    let ids = retention_candidate_ids(&conn, &policy, started_at.as_deref(), at)
+        .map_err(|error| format!("Retention cleanup failed: {error}"))?
+        .into_iter()
+        .map(|(id, _)| id)
+        .collect::<Vec<_>>();
+    let result = delete_capture_ids_from_conn(&mut conn, state, &ids)?;
+    set_setting(&conn, "retention_last_run_at", &at.to_rfc3339())?;
     Ok(result)
 }
 
@@ -1362,7 +1644,7 @@ fn rename_context(
     id: String,
     name: String,
 ) -> CommandResult<ContextDto> {
-    if id == INBOX_CONTEXT_ID || id == CONTENT_BASE_CONTEXT_ID {
+    if id == INBOX_CONTEXT_ID || id == KNOWLEDGE_BASE_CONTEXT_ID {
         return Err(AppError::new("context.protected_rename"));
     }
 
@@ -1398,7 +1680,7 @@ fn rename_context(
 
 #[tauri::command]
 fn delete_context(app: AppHandle, state: State<AppState>, id: String) -> CommandResult<()> {
-    if id == INBOX_CONTEXT_ID || id == CONTENT_BASE_CONTEXT_ID {
+    if id == INBOX_CONTEXT_ID || id == KNOWLEDGE_BASE_CONTEXT_ID {
         return Err(AppError::new("context.protected_delete"));
     }
 
@@ -2044,7 +2326,7 @@ fn validate_capture_exists(conn: &Connection, capture_id: &str) -> CommandResult
 }
 
 fn validate_user_context_exists(conn: &Connection, context_id: &str) -> CommandResult<()> {
-    if context_id == INBOX_CONTEXT_ID || context_id == CONTENT_BASE_CONTEXT_ID {
+    if context_id == INBOX_CONTEXT_ID || context_id == KNOWLEDGE_BASE_CONTEXT_ID {
         return Err(AppError::new("context.reserved_collection"));
     }
     let exists = conn
@@ -2066,7 +2348,7 @@ fn list_recent_contexts(state: State<AppState>) -> CommandResult<Vec<ContextDto>
          FROM contexts co
          JOIN capture_contexts recent_cc ON recent_cc.context_id = co.id
          LEFT JOIN capture_contexts all_cc ON all_cc.context_id = co.id
-         WHERE co.id NOT IN ('inbox', 'content-base')
+         WHERE co.id NOT IN ('inbox', 'knowledge-base')
          GROUP BY co.id
          ORDER BY MAX(recent_cc.created_at) DESC,
                   SUM(CASE WHEN recent_cc.assignment_origin = 'manual' THEN 2 ELSE 1 END) DESC
@@ -2415,13 +2697,28 @@ fn export_tag_document(state: State<AppState>, tag: String) -> CommandResult<Str
 
 #[tauri::command]
 async fn generate_magic_search(
+    app: AppHandle,
     state: State<'_, AppState>,
     request: MagicSearchRequest,
 ) -> CommandResult<MagicSearchDocumentDto> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut conn = open_conn(&state)?;
-        generate_magic_search_document(&mut conn, &state, request)
+        generate_magic_search_document(&mut conn, &state, &app, request)
+    })
+    .await
+    .map_err(|error| AppError::from(err(error)))?
+}
+
+#[tauri::command]
+async fn search_magic_items(
+    state: State<'_, AppState>,
+    request: MagicSearchItemsRequest,
+) -> CommandResult<MagicSearchItemsPageDto> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = open_conn(&state)?;
+        search_magic_items_from_conn(&conn, &state, request)
     })
     .await
     .map_err(|error| AppError::from(err(error)))?
@@ -3068,13 +3365,10 @@ fn run_capture_core(
     drop(monitor_suppression);
 
     if capture_kind == "reference"
-        && matches!(
-            payload.primary_kind(),
-            ClipboardRepresentationKind::Files | ClipboardRepresentationKind::Image
-        )
+        && matches!(payload.primary_kind(), ClipboardRepresentationKind::Files)
     {
         return Err(
-            "A Base de conteúdo aceita texto selecionado. Selecione texto antes de usar o atalho."
+            "The Knowledge Base accepts selected text or images. Select content before using the shortcut."
                 .into(),
         );
     }
@@ -3816,7 +4110,7 @@ fn load_chat_captures(conn: &Connection, request: &ChatRequest) -> Result<Vec<Ca
              FROM captures c
              WHERE (?1 IS NULL
                 OR (?1 = 'inbox' AND c.capture_kind <> 'reference' AND NOT EXISTS (SELECT 1 FROM capture_contexts cc WHERE cc.capture_id = c.id))
-                OR (?1 = 'content-base' AND c.capture_kind = 'reference')
+                OR (?1 = 'knowledge-base' AND c.capture_kind = 'reference')
                 OR EXISTS (SELECT 1 FROM capture_contexts cc WHERE cc.capture_id = c.id AND cc.context_id = ?1))
                AND (?2 IS NULL OR lower(coalesce(c.source_app_name, '')) LIKE '%' || lower(?2) || '%')
                AND (?3 IS NULL OR c.captured_at >= ?3)
@@ -4316,7 +4610,7 @@ fn context_label(capture: &CaptureDto) -> String {
     let names = context_names(capture);
     if names.is_empty() {
         if capture.kind == "reference" {
-            "Content Base".into()
+            "Knowledge Base".into()
         } else {
             "Inbox".into()
         }
@@ -4917,6 +5211,48 @@ fn hybrid_magic_search(
     ))
 }
 
+fn search_magic_items_from_conn(
+    conn: &Connection,
+    state: &AppState,
+    request: MagicSearchItemsRequest,
+) -> CommandResult<MagicSearchItemsPageDto> {
+    let query = request.query.trim();
+    if query.is_empty() {
+        return Err(AppError::new("search.query_required"));
+    }
+    let offset = request.offset.unwrap_or(0);
+    let limit = request.limit.unwrap_or(20).clamp(1, 20);
+    let filters = MagicSearchRequest {
+        query: query.to_string(),
+        context_ids: Vec::new(),
+        include_knowledge_base: None,
+        include_inbox: None,
+        context_id: None,
+        tag: None,
+        date_from: None,
+        date_to: None,
+        limit: None,
+        previous_document_id: None,
+        response_mode: None,
+    };
+    let captures = load_magic_search_captures(conn, &filters)?;
+    // A fixed retrieval ceiling keeps pagination stable between requests and
+    // preserves the existing 200-candidate Magic Search boundary.
+    let (scored, _, _) = hybrid_magic_search(conn, state, query, captures, 25, true)?;
+    let total = scored.len();
+    let items = scored
+        .iter()
+        .skip(offset)
+        .take(limit)
+        .map(evidence_from_scored)
+        .collect::<Vec<_>>();
+    Ok(MagicSearchItemsPageDto {
+        has_more: offset.saturating_add(items.len()) < total,
+        items,
+        total,
+    })
+}
+
 fn load_magic_search_captures(
     conn: &Connection,
     request: &MagicSearchRequest,
@@ -4928,22 +5264,17 @@ fn load_magic_search_captures(
                 c.source_process_path, c.window_title, c.window_id, c.platform,
                 c.metadata_json, c.capture_kind
          FROM captures c
-         WHERE (?1 IS NULL
-            OR (?1 = 'inbox' AND c.capture_kind <> 'reference' AND NOT EXISTS (SELECT 1 FROM capture_contexts cc WHERE cc.capture_id = c.id))
-            OR (?1 = 'content-base' AND c.capture_kind = 'reference')
-            OR EXISTS (SELECT 1 FROM capture_contexts cc WHERE cc.capture_id = c.id AND cc.context_id = ?1))
-           AND (?2 IS NULL OR c.captured_at >= ?2)
-           AND (?3 IS NULL OR c.captured_at <= ?3)
-           AND (?4 IS NULL OR EXISTS (
-                SELECT 1 FROM capture_tags ct WHERE ct.capture_id = c.id AND ct.tag = ?4
+         WHERE (?1 IS NULL OR c.captured_at >= ?1)
+           AND (?2 IS NULL OR c.captured_at <= ?2)
+           AND (?3 IS NULL OR EXISTS (
+                SELECT 1 FROM capture_tags ct WHERE ct.capture_id = c.id AND ct.tag = ?3
            ))
-         ORDER BY c.captured_at DESC",
+         ORDER BY c.captured_at ASC, c.id ASC",
         )
         .map_err(err)?;
     let mut captures = stmt
         .query_map(
             params![
-                request.context_id.as_deref(),
                 request.date_from.as_deref(),
                 request.date_to.as_deref(),
                 request.tag.as_deref(),
@@ -4954,91 +5285,32 @@ fn load_magic_search_captures(
         .collect::<Result<Vec<_>, _>>()
         .map_err(err)?;
     hydrate_captures(conn, &mut captures)?;
+    let explicit_scope = !request.context_ids.is_empty()
+        || request.include_knowledge_base.is_some()
+        || request.include_inbox.is_some();
+    if explicit_scope {
+        let selected_contexts = request.context_ids.iter().collect::<HashSet<_>>();
+        let include_knowledge_base = request.include_knowledge_base.unwrap_or(false);
+        let include_inbox = request.include_inbox.unwrap_or(false);
+        captures.retain(|capture| {
+            (include_knowledge_base && capture.kind == "reference")
+                || (include_inbox && capture.kind != "reference" && capture.contexts.is_empty())
+                || capture
+                    .contexts
+                    .iter()
+                    .any(|context| selected_contexts.contains(&context.id))
+        });
+    } else if let Some(legacy_context_id) = request.context_id.as_deref() {
+        captures.retain(|capture| match legacy_context_id {
+            "knowledge-base" => capture.kind == "reference",
+            "inbox" => capture.kind != "reference" && capture.contexts.is_empty(),
+            context_id => capture
+                .contexts
+                .iter()
+                .any(|context| context.id == context_id),
+        });
+    }
     Ok(captures)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum MagicResponseMode {
-    Direct,
-    Brief,
-    Document,
-}
-
-impl MagicResponseMode {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Direct => "direct",
-            Self::Brief => "brief",
-            Self::Document => "document",
-        }
-    }
-
-    fn evidence_limit(self) -> usize {
-        match self {
-            Self::Direct => 5,
-            Self::Brief => 10,
-            Self::Document => 24,
-        }
-    }
-}
-
-fn classify_magic_response(query: &str, requested: Option<&str>) -> MagicResponseMode {
-    match requested {
-        Some("direct") => return MagicResponseMode::Direct,
-        Some("brief") => return MagicResponseMode::Brief,
-        Some("document") => return MagicResponseMode::Document,
-        _ => {}
-    }
-    let normalized = normalize_text(query);
-    let document_terms = [
-        "consolide",
-        "consolidate",
-        "documento",
-        "document",
-        "relatorio",
-        "report",
-        "linha do tempo",
-        "timeline",
-        "compare",
-        "comparacao",
-        "mapeie",
-        "map everything",
-        "tudo sobre",
-        "everything about",
-        "todos os",
-        "all related",
-    ];
-    if document_terms.iter().any(|term| normalized.contains(term)) {
-        return MagicResponseMode::Document;
-    }
-    let brief_terms = [
-        "resuma",
-        "resumo",
-        "summarize",
-        "summary",
-        "principais pontos",
-        "key points",
-    ];
-    if brief_terms.iter().any(|term| normalized.contains(term)) {
-        MagicResponseMode::Brief
-    } else {
-        MagicResponseMode::Direct
-    }
-}
-
-fn is_sensitive_lookup(query: &str) -> bool {
-    let normalized = normalize_text(query);
-    [
-        "chave",
-        "api key",
-        "key",
-        "token",
-        "segredo",
-        "secret",
-        "credential",
-    ]
-    .iter()
-    .any(|term| normalized.contains(term))
 }
 
 fn secret_pattern() -> &'static Regex {
@@ -5047,22 +5319,6 @@ fn secret_pattern() -> &'static Regex {
             .expect("valid secret pattern")
     });
     &PATTERN
-}
-
-fn extract_sensitive_value(text: &str) -> Option<String> {
-    secret_pattern()
-        .find(text)
-        .map(|value| value.as_str().to_string())
-}
-
-fn capture_sensitive_value(capture: &CaptureDto) -> Option<String> {
-    extract_sensitive_value(&capture.content_text).or_else(|| {
-        capture
-            .ocr
-            .as_ref()
-            .and_then(|ocr| ocr.text.as_deref())
-            .and_then(extract_sensitive_value)
-    })
 }
 
 fn mask_secret(value: &str) -> String {
@@ -5103,28 +5359,31 @@ impl SecretRedactionMap {
         map
     }
 
-    fn for_magic_search(query: &str, relevant: &[ScoredCapture]) -> Self {
+    fn for_document(query: &str, captures: &[CaptureDto]) -> Self {
         let mut texts = vec![query];
-        for item in relevant {
-            texts.push(item.capture.content_text.as_str());
-            if let Some(app_name) = item.capture.source_app_name.as_deref() {
+        for capture in captures {
+            texts.push(capture.content_text.as_str());
+            if let Some(app_name) = capture.source_app_name.as_deref() {
                 texts.push(app_name);
             }
-            if let Some(window_title) = item.capture.window_title.as_deref() {
+            if let Some(window_title) = capture.window_title.as_deref() {
                 texts.push(window_title);
             }
-            for context in &item.capture.contexts {
+            for representation in &capture.representations {
+                if let Some(text) = representation.text_content.as_deref() {
+                    texts.push(text);
+                }
+            }
+            for context in &capture.contexts {
                 texts.push(context.name.as_str());
             }
-            for tag in &item.capture.tags {
+            for tag in &capture.tags {
                 texts.push(tag.as_str());
             }
-            if let Some(ocr_text) = item
-                .capture
-                .ocr
-                .as_ref()
-                .and_then(|ocr| ocr.text.as_deref())
-            {
+            for entity in &capture.entities {
+                texts.push(entity.value.as_str());
+            }
+            if let Some(ocr_text) = capture.ocr.as_ref().and_then(|ocr| ocr.text.as_deref()) {
                 texts.push(ocr_text);
             }
         }
@@ -5172,116 +5431,199 @@ impl SecretRedactionMap {
     }
 }
 
-fn response_uses_expected_language(text: &str, portuguese: bool) -> bool {
-    let normalized = format!(" {} ", normalize_text(text));
-    let pt_score = [
-        " que ",
-        " de ",
-        " para ",
-        " com ",
-        " nao ",
-        " uma ",
-        " evidencias ",
-    ]
-    .iter()
-    .filter(|term| normalized.contains(*term))
-    .count();
-    let en_score = [
-        " the ",
-        " is ",
-        " for ",
-        " with ",
-        " not ",
-        " a ",
-        " evidence ",
-    ]
-    .iter()
-    .filter(|term| normalized.contains(*term))
-    .count();
-    if portuguese {
-        en_score < 2 || pt_score >= en_score
+const PROVIDER_BATCH_CHARS: usize = 40_000;
+
+fn provider_capture_text(
+    capture: &CaptureDto,
+    portuguese: bool,
+    secret_map: &SecretRedactionMap,
+) -> String {
+    let mut seen = HashSet::new();
+    let representations = capture
+        .representations
+        .iter()
+        .filter_map(|representation| {
+            let text = representation.text_content.as_deref()?.trim();
+            if text.is_empty()
+                || text == capture.content_text.trim()
+                || !seen.insert(text.to_string())
+            {
+                return None;
+            }
+            Some(format!(
+                "{} ({}):\n{}",
+                representation.format_name, representation.kind, text
+            ))
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let entities = capture
+        .entities
+        .iter()
+        .map(|entity| format!("{}: {}", entity.kind, entity.value))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let files = capture
+        .files
+        .iter()
+        .map(|file| {
+            format!(
+                "{} | {} | {} bytes | {}",
+                file.display_name,
+                file.extension.as_deref().unwrap_or("no extension"),
+                file.size_bytes.unwrap_or_default(),
+                file.availability
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let contexts = if capture.contexts.is_empty() {
+        context_label(capture)
     } else {
-        pt_score < 2 || en_score >= pt_score
-    }
+        capture
+            .contexts
+            .iter()
+            .map(|context| context.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let raw = if portuguese {
+        format!(
+            "[capture:{id}]\nData: {date}\nTipo: {kind}/{content_kind}\nAplicativo: {app}\nJanela: {window}\nContextos: {contexts}\nTags: {tags}\nEntidades: {entities}\n\nTexto principal:\n{content}\n\nRepresentações textuais:\n{representations}\n\nOCR:\n{ocr}\n\nArquivos (metadados seguros):\n{files}",
+            id = capture.id,
+            date = capture.captured_at,
+            kind = capture.kind,
+            content_kind = capture.content_kind,
+            app = capture.source_app_name.as_deref().unwrap_or("Aplicativo desconhecido"),
+            window = capture.window_title.as_deref().unwrap_or(""),
+            tags = capture.tags.join(", "),
+            content = capture.content_text,
+            ocr = capture.ocr.as_ref().and_then(|ocr| ocr.text.as_deref()).unwrap_or(""),
+        )
+    } else {
+        format!(
+            "[capture:{id}]\nDate: {date}\nType: {kind}/{content_kind}\nApplication: {app}\nWindow: {window}\nContexts: {contexts}\nTags: {tags}\nEntities: {entities}\n\nMain text:\n{content}\n\nText representations:\n{representations}\n\nOCR:\n{ocr}\n\nFiles (safe metadata):\n{files}",
+            id = capture.id,
+            date = capture.captured_at,
+            kind = capture.kind,
+            content_kind = capture.content_kind,
+            app = capture.source_app_name.as_deref().unwrap_or("Unknown application"),
+            window = capture.window_title.as_deref().unwrap_or(""),
+            tags = capture.tags.join(", "),
+            content = capture.content_text,
+            ocr = capture.ocr.as_ref().and_then(|ocr| ocr.text.as_deref()).unwrap_or(""),
+        )
+    };
+    secret_map.redact(&raw)
 }
 
-fn constrain_magic_response(text: &str, mode: MagicResponseMode) -> String {
-    match mode {
-        MagicResponseMode::Direct => {
-            let compact = text
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .take(3)
-                .collect::<Vec<_>>()
-                .join(" ");
-            shorten(compact.trim_start_matches('#').trim(), 600)
-        }
-        MagicResponseMode::Brief => shorten(text, 1800),
-        MagicResponseMode::Document => text.to_string(),
+fn split_provider_text(value: &str, limit: usize) -> Vec<String> {
+    if value.chars().count() <= limit {
+        return vec![value.to_string()];
     }
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    for paragraph in value.split("\n\n") {
+        if paragraph.chars().count() > limit {
+            if !current.is_empty() {
+                chunks.push(std::mem::take(&mut current));
+            }
+            let chars = paragraph.chars().collect::<Vec<_>>();
+            for part in chars.chunks(limit) {
+                chunks.push(part.iter().collect());
+            }
+        } else if current.chars().count() + paragraph.chars().count() + 2 > limit {
+            chunks.push(std::mem::take(&mut current));
+            current.push_str(paragraph);
+        } else {
+            if !current.is_empty() {
+                current.push_str("\n\n");
+            }
+            current.push_str(paragraph);
+        }
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
+fn provider_evidence_batches(
+    captures: &[CaptureDto],
+    portuguese: bool,
+    secret_map: &SecretRedactionMap,
+) -> Vec<String> {
+    let mut pieces = Vec::new();
+    for capture in captures {
+        let block = provider_capture_text(capture, portuguese, secret_map);
+        let split = split_provider_text(&block, PROVIDER_BATCH_CHARS - 200);
+        let total = split.len();
+        for (index, value) in split.into_iter().enumerate() {
+            pieces.push(if total > 1 {
+                format!(
+                    "[capture:{}] — part {}/{}\n{}",
+                    capture.id,
+                    index + 1,
+                    total,
+                    value
+                )
+            } else {
+                value
+            });
+        }
+    }
+    let mut batches = Vec::new();
+    let mut current = String::new();
+    for piece in pieces {
+        if !current.is_empty()
+            && current.chars().count() + piece.chars().count() + 7 > PROVIDER_BATCH_CHARS
+        {
+            batches.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push_str("\n\n---\n\n");
+        }
+        current.push_str(&piece);
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
+}
+
+fn emit_document_progress(app: &AppHandle, phase: &str, completed: usize, total: usize) {
+    let _ = app.emit(
+        "document-generation-progress",
+        DocumentGenerationProgressDto {
+            phase: phase.to_string(),
+            completed,
+            total,
+        },
+    );
 }
 
 fn preview_magic_search_document(
     conn: &Connection,
-    state: &AppState,
+    _state: &AppState,
     mut request: MagicSearchRequest,
 ) -> CommandResult<MagicSearchPreviewDto> {
     let query = request.query.trim().to_string();
-    let mode = classify_magic_response(&query, request.response_mode.as_deref());
-    request.response_mode = Some(mode.as_str().to_string());
+    request.response_mode = Some("document".to_string());
     let captures = load_magic_search_captures(conn, &request)?;
     let available_count = captures.len();
-    if query.is_empty() {
-        return Ok(MagicSearchPreviewDto {
-            evidence_count: available_count.min(mode.evidence_limit()),
-            available_count,
-        });
-    }
-
-    let settings = settings_from_conn(conn, state)?;
-    let sensitive_lookup = is_sensitive_lookup(&query);
-    let limit = request
-        .limit
-        .unwrap_or(mode.evidence_limit())
-        .min(mode.evidence_limit())
-        .max(1);
-    let (mut scored, _, _) = hybrid_magic_search(
-        conn,
-        state,
-        &query,
-        captures,
-        limit,
-        settings.magic_search_engine == "local",
-    )?;
-    if sensitive_lookup {
-        for item in &mut scored {
-            if capture_sensitive_value(&item.capture).is_some() {
-                item.score += 100.0;
-            }
-        }
-    }
-    let use_full_scope =
-        request.tag.is_some() || request.context_id.is_some() || is_broad_collection_query(&query);
-    let matching_count = scored
-        .iter()
-        .filter(|item| {
-            if sensitive_lookup {
-                capture_sensitive_value(&item.capture).is_some()
-            } else {
-                item.score > 0.0 || use_full_scope
-            }
-        })
-        .count();
+    let secret_map = SecretRedactionMap::for_document(&query, &captures);
+    let batch_count = provider_evidence_batches(&captures, false, &secret_map).len();
     Ok(MagicSearchPreviewDto {
-        evidence_count: matching_count.min(limit),
+        evidence_count: available_count,
         available_count,
+        batch_count,
     })
 }
 
 fn generate_magic_search_document(
     conn: &mut Connection,
     state: &AppState,
+    app: &AppHandle,
     mut request: MagicSearchRequest,
 ) -> CommandResult<MagicSearchDocumentDto> {
     let settings = settings_with_ai_secret(conn, state)?;
@@ -5290,138 +5632,53 @@ fn generate_magic_search_document(
     if query.is_empty() {
         return Err(AppError::new("search.query_required"));
     }
-    let mode = classify_magic_response(&query, request.response_mode.as_deref());
-    request.response_mode = Some(mode.as_str().to_string());
-    let sensitive_lookup = is_sensitive_lookup(&query);
+    if settings.ai_api_key.trim().is_empty() {
+        return Err(AppError::new("ai.key_required"));
+    }
+    request.response_mode = Some("document".to_string());
     let captures = load_magic_search_captures(conn, &request)?;
-    let limit = request
-        .limit
-        .unwrap_or(mode.evidence_limit())
-        .min(mode.evidence_limit())
-        .max(1);
-    let (mut scored, retrieval_engine, retrieval_model) = hybrid_magic_search(
-        conn,
-        state,
-        &query,
-        captures,
-        limit,
-        settings.magic_search_engine == "local",
-    )?;
-    if sensitive_lookup {
-        for item in &mut scored {
-            if capture_sensitive_value(&item.capture).is_some() {
-                item.score += 100.0;
-            }
-        }
+    if captures.is_empty() {
+        return Err(AppError::new("document.scope_empty"));
     }
-    scored.sort_by(|left, right| right.score.total_cmp(&left.score));
-    let use_full_scope =
-        request.tag.is_some() || request.context_id.is_some() || is_broad_collection_query(&query);
-    let relevant = scored
+    let secret_map = SecretRedactionMap::for_document(&query, &captures);
+    let batches = provider_evidence_batches(&captures, portuguese, &secret_map);
+    emit_document_progress(app, "preparing", 0, batches.len());
+    let safe_query = secret_map.redact(&query);
+    let system = document_generation_system_prompt(portuguese);
+    let generated = if batches.len() == 1 {
+        let prompt = document_final_prompt(&safe_query, &batches[0], portuguese, false);
+        call_document_provider(&settings, system, &prompt)?
+    } else {
+        let extraction_system = document_extraction_system_prompt(portuguese);
+        let mut summaries = Vec::with_capacity(batches.len());
+        for (index, batch) in batches.iter().enumerate() {
+            emit_document_progress(app, "batching", index, batches.len());
+            let prompt =
+                document_batch_prompt(&safe_query, batch, index + 1, batches.len(), portuguese);
+            summaries.push(call_document_provider(
+                &settings,
+                extraction_system,
+                &prompt,
+            )?);
+        }
+        emit_document_progress(app, "synthesizing", batches.len(), batches.len());
+        let consolidated =
+            consolidate_document_summaries(&settings, &safe_query, summaries, portuguese)?;
+        let prompt = document_final_prompt(&safe_query, &consolidated, portuguese, true);
+        call_document_provider(&settings, system, &prompt)?
+    };
+    let restored = secret_map.restore_document(&generated);
+    let relevant = captures
         .into_iter()
-        .filter(|item| {
-            if sensitive_lookup {
-                capture_sensitive_value(&item.capture).is_some()
-            } else {
-                item.score > 0.0 || use_full_scope
-            }
+        .map(|capture| ScoredCapture {
+            capture,
+            score: 0.0,
+            matched_fields: vec!["selected_scope".to_string()],
         })
-        .take(limit)
         .collect::<Vec<_>>();
-    if relevant.is_empty() {
-        return Err(AppError::new("search.no_evidence"));
-    }
-
-    let title = match mode {
-        MagicResponseMode::Direct => format!(
-            "{} — {}",
-            if portuguese {
-                "Resposta direta"
-            } else {
-                "Direct answer"
-            },
-            magic_search_title(&query)
-        ),
-        MagicResponseMode::Brief => format!(
-            "{} — {}",
-            if portuguese {
-                "Resumo breve"
-            } else {
-                "Brief summary"
-            },
-            magic_search_title(&query)
-        ),
-        MagicResponseMode::Document => magic_search_title(&query),
-    };
-    let secret_map = SecretRedactionMap::for_magic_search(&query, &relevant);
-    let sensitive_value = if sensitive_lookup {
-        relevant
-            .iter()
-            .find_map(|item| capture_sensitive_value(&item.capture))
-    } else {
-        None
-    };
-    let deterministic = render_magic_search_response(
-        &title,
-        &query,
-        &relevant,
-        mode,
-        portuguese,
-        sensitive_value.as_deref(),
-    );
-    let (markdown, provider, model, generation_warning) = if sensitive_lookup {
-        (
-            deterministic,
-            "local".to_string(),
-            "secure-lookup".to_string(),
-            None,
-        )
-    } else if settings.magic_search_engine == "local" || settings.ai_api_key.trim().is_empty() {
-        (
-            deterministic,
-            "local".to_string(),
-            "deterministic".to_string(),
-            None,
-        )
-    } else {
-        let prompt = build_magic_search_prompt(&query, &relevant, mode, portuguese, &secret_map);
-        let system = magic_search_system_prompt(mode, portuguese);
-        match call_ai_raw(&settings, &system, &prompt) {
-            Ok(mut markdown) => {
-                if !response_uses_expected_language(&markdown, portuguese) {
-                    let retry_system = format!(
-                        "{} {}",
-                        system,
-                        if portuguese {
-                            "IMPORTANTE: responda exclusivamente em português brasileiro."
-                        } else {
-                            "IMPORTANT: respond exclusively in English."
-                        }
-                    );
-                    if let Ok(retry) = call_ai_raw(&settings, &retry_system, &prompt) {
-                        markdown = retry;
-                    }
-                }
-                markdown = constrain_magic_response(&markdown, mode);
-                (markdown, settings.ai_provider, settings.ai_model, None)
-            }
-            Err(error) => {
-                eprintln!("AI provider failed; local synthesis was used: {error}");
-                (
-                    deterministic,
-                    "local".to_string(),
-                    "deterministic".to_string(),
-                    Some(AppNotice::new("ai.provider_failed_local_fallback")),
-                )
-            }
-        }
-    };
-    let markdown = if mode == MagicResponseMode::Document {
-        let restored = secret_map.restore_document(&markdown);
-        number_magic_search_sources(&restored, &relevant, portuguese)
-    } else {
-        markdown
-    };
+    let title = extract_document_title(&restored).unwrap_or_else(|| magic_search_title(&query));
+    let markdown = number_magic_search_sources(&restored, &relevant, portuguese);
+    emit_document_progress(app, "saving", batches.len(), batches.len());
 
     let id = Uuid::new_v4().to_string();
     let created_at = now();
@@ -5445,18 +5702,14 @@ fn generate_magic_search_document(
             |row| row.get::<_, i64>(0),
         )
         .map_err(err)?;
-    let generation_warning_json = generation_warning
-        .as_ref()
-        .map(serde_json::to_string)
-        .transpose()
-        .map_err(err)?;
     transaction.execute(
         "INSERT INTO magic_search_documents
          (id, root_id, previous_document_id, version, title, query, markdown, provider, model,
           retrieval_engine, retrieval_model, filters_json, generation_warning, evidence_count, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        params![id, root_id, request.previous_document_id, version, title, query, markdown, provider, model,
-            retrieval_engine, retrieval_model, filters_json, generation_warning_json, relevant.len() as i64, created_at],
+        params![id, root_id, request.previous_document_id, version, title, query, markdown,
+            settings.ai_provider, settings.ai_model, "filtered-scope", Option::<String>::None,
+            filters_json, Option::<String>::None, relevant.len() as i64, created_at],
     ).map_err(err)?;
     for (rank, item) in relevant.iter().enumerate() {
         let capture = &item.capture;
@@ -5489,9 +5742,129 @@ fn generate_magic_search_document(
             .map_err(err)?;
     }
     transaction.commit().map_err(err)?;
-    let mut document = get_magic_search_document(conn, &id)?;
-    document.sensitive_value = sensitive_value;
-    Ok(document)
+    emit_document_progress(app, "complete", batches.len(), batches.len());
+    get_magic_search_document(conn, &id).map_err(AppError::from)
+}
+
+fn call_document_provider(
+    settings: &SettingsDto,
+    system: &str,
+    prompt: &str,
+) -> CommandResult<String> {
+    call_ai_raw(settings, system, prompt).map_err(|error| {
+        eprintln!("AI document generation failed: {error}");
+        AppError::new("ai.provider_failed")
+    })
+}
+
+fn document_extraction_system_prompt(portuguese: bool) -> &'static str {
+    if portuguese {
+        "Extraia todos os fatos, decisões, configurações, valores conflitantes, datas e lacunas das evidências. Preserve cada citação [capture:ID] e cada placeholder [SCRYPUPPY_SECRET_N] exatamente. Não invente informações. Responda exclusivamente em português brasileiro."
+    } else {
+        "Extract every fact, decision, configuration, conflicting value, date, and gap from the evidence. Preserve every [capture:ID] citation and [SCRYPUPPY_SECRET_N] placeholder exactly. Do not invent information. Respond exclusively in English."
+    }
+}
+
+fn document_generation_system_prompt(portuguese: bool) -> &'static str {
+    if portuguese {
+        "Gere um documento Markdown completo e rastreável usando somente as evidências. Comece com um único título H1 focado no assunto, não na pergunta. Consolide repetições, preserve conflitos com suas datas, diferencie fatos de inferências e crie seções como visão geral, identificação, configuração técnica, conversas e decisões e pontos a confirmar apenas quando houver suporte. Toda afirmação factual deve citar [capture:ID]. Preserve placeholders [SCRYPUPPY_SECRET_N]. Não crie uma seção de fontes; ela será adicionada localmente. Responda exclusivamente em português brasileiro."
+    } else {
+        "Generate a complete, traceable Markdown document using only the evidence. Begin with one H1 title focused on the subject, not the question. Consolidate repetition, preserve conflicts with their dates, distinguish facts from inferences, and create sections such as overview, identification, technical configuration, conversations and decisions, and points to confirm only when supported. Every factual statement must cite [capture:ID]. Preserve [SCRYPUPPY_SECRET_N] placeholders. Do not add a sources section; it is appended locally. Respond exclusively in English."
+    }
+}
+
+fn document_batch_prompt(
+    query: &str,
+    batch: &str,
+    index: usize,
+    total: usize,
+    portuguese: bool,
+) -> String {
+    if portuguese {
+        format!("Pedido do usuário:\n{query}\n\nLote {index} de {total}:\n{batch}\n\nProduza uma extração exaustiva e citada deste lote para a síntese final.")
+    } else {
+        format!("User request:\n{query}\n\nBatch {index} of {total}:\n{batch}\n\nProduce an exhaustive, cited extraction from this batch for final synthesis.")
+    }
+}
+
+fn document_final_prompt(
+    query: &str,
+    evidence: &str,
+    portuguese: bool,
+    summarized: bool,
+) -> String {
+    let evidence_label = if summarized {
+        if portuguese {
+            "Extrações citadas de todos os lotes"
+        } else {
+            "Cited extracts from every batch"
+        }
+    } else if portuguese {
+        "Evidências completas"
+    } else {
+        "Complete evidence"
+    };
+    if portuguese {
+        format!("Pedido do usuário:\n{query}\n\n{evidence_label}:\n{evidence}\n\nCrie o documento final em Markdown.")
+    } else {
+        format!("User request:\n{query}\n\n{evidence_label}:\n{evidence}\n\nCreate the final Markdown document.")
+    }
+}
+
+fn pack_provider_fragments(fragments: Vec<String>) -> Vec<String> {
+    let mut batches = Vec::new();
+    let mut current = String::new();
+    for fragment in fragments {
+        for piece in split_provider_text(&fragment, PROVIDER_BATCH_CHARS - 100) {
+            if !current.is_empty()
+                && current.chars().count() + piece.chars().count() + 7 > PROVIDER_BATCH_CHARS
+            {
+                batches.push(std::mem::take(&mut current));
+            }
+            if !current.is_empty() {
+                current.push_str("\n\n---\n\n");
+            }
+            current.push_str(&piece);
+        }
+    }
+    if !current.is_empty() {
+        batches.push(current);
+    }
+    batches
+}
+
+fn consolidate_document_summaries(
+    settings: &SettingsDto,
+    query: &str,
+    mut summaries: Vec<String>,
+    portuguese: bool,
+) -> CommandResult<String> {
+    let system = document_extraction_system_prompt(portuguese);
+    for _ in 0..8 {
+        let batches = pack_provider_fragments(summaries);
+        if batches.len() == 1 {
+            return Ok(batches.into_iter().next().unwrap_or_default());
+        }
+        summaries = batches
+            .iter()
+            .enumerate()
+            .map(|(index, batch)| {
+                let prompt =
+                    document_batch_prompt(query, batch, index + 1, batches.len(), portuguese);
+                call_document_provider(settings, system, &prompt)
+            })
+            .collect::<CommandResult<Vec<_>>>()?;
+    }
+    Err(AppError::new("ai.provider_failed"))
+}
+
+fn extract_document_title(markdown: &str) -> Option<String> {
+    markdown
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("# "))
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+        .map(|title| shorten(title, 120))
 }
 
 fn magic_search_title(query: &str) -> String {
@@ -5500,72 +5873,6 @@ fn magic_search_title(query: &str) -> String {
         clean.into()
     } else {
         shorten(clean, 72)
-    }
-}
-
-fn render_magic_search_response(
-    title: &str,
-    query: &str,
-    relevant: &[ScoredCapture],
-    mode: MagicResponseMode,
-    portuguese: bool,
-    sensitive_value: Option<&str>,
-) -> String {
-    if let Some(value) = sensitive_value {
-        let masked = mask_secret(value);
-        let capture_id = &relevant[0].capture.id;
-        return if portuguese {
-            format!("A credencial encontrada é `{masked}`. Use **Revelar** ou **Copiar credencial** para acessar o valor completo. [capture:{capture_id}]")
-        } else {
-            format!("The credential found is `{masked}`. Use **Reveal** or **Copy credential** to access the full value. [capture:{capture_id}]")
-        };
-    }
-    match mode {
-        MagicResponseMode::Document => {
-            render_magic_search_fallback(title, query, relevant, portuguese)
-        }
-        MagicResponseMode::Direct => {
-            let capture = &relevant[0].capture;
-            if query_requests_application_id(query) {
-                if let Some(value) = capture
-                    .source_app_id
-                    .as_deref()
-                    .filter(|value| !value.trim().is_empty())
-                {
-                    return format!("`{value}` [capture:{}]", capture.id);
-                }
-            }
-            let value = redact_sensitive_values(capture.content_text.trim());
-            let concise = shorten(&value, 360);
-            if portuguese {
-                format!("Encontrei: {concise} [capture:{}]", capture.id)
-            } else {
-                format!("I found: {concise} [capture:{}]", capture.id)
-            }
-        }
-        MagicResponseMode::Brief => {
-            let heading = if portuguese {
-                "## Resumo"
-            } else {
-                "## Summary"
-            };
-            let bullets = relevant
-                .iter()
-                .take(5)
-                .map(|item| {
-                    format!(
-                        "- {} [capture:{}]",
-                        shorten(
-                            &redact_sensitive_values(item.capture.content_text.trim()),
-                            220
-                        ),
-                        item.capture.id
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            format!("{heading}\n\n{bullets}")
-        }
     }
 }
 
@@ -5594,33 +5901,6 @@ fn direct_answer_from_evidence(query: &str, evidence: &[EvidenceItem]) -> Option
         .filter(|value| !value.trim().is_empty())
 }
 
-fn magic_search_system_prompt(mode: MagicResponseMode, portuguese: bool) -> String {
-    let language = if portuguese {
-        "Responda exclusivamente em português brasileiro, independentemente do idioma da consulta."
-    } else {
-        "Respond exclusively in English, regardless of the query language."
-    };
-    let format = match (mode, portuguese) {
-        (MagicResponseMode::Direct, true) => "Dê somente a resposta necessária em uma ou duas frases. Não crie título, introdução, conclusão, lista ou relatório.",
-        (MagicResponseMode::Direct, false) => "Give only the necessary answer in one or two sentences. Do not create a title, introduction, conclusion, list, or report.",
-        (MagicResponseMode::Brief, true) => "Produza um resumo curto: um parágrafo ou no máximo cinco tópicos. Não crie um relatório extenso.",
-        (MagicResponseMode::Brief, false) => "Produce a brief summary: one paragraph or no more than five bullets. Do not create a long report.",
-        (MagicResponseMode::Document, true) => "Gere um documento Markdown estruturado com resumo, estado atual, decisões, riscos, pendências e linha do tempo somente quando houver suporte.",
-        (MagicResponseMode::Document, false) => "Generate a structured Markdown document with a summary, current state, decisions, risks, pending work, and a timeline only when supported.",
-    };
-    let evidence = if portuguese {
-        "Use exclusivamente as evidências fornecidas. Toda afirmação factual deve citar [capture:ID]. Declare lacunas e não use cercas de código ao redor da resposta."
-    } else {
-        "Use only the supplied evidence. Every factual statement must cite [capture:ID]. State gaps and do not wrap the response in a code fence."
-    };
-    let placeholders = if portuguese {
-        "Valores sensíveis aparecem como [SCRYPUPPY_SECRET_N]. Preserve cada placeholder exatamente como recebido e nunca tente reconstruir o valor oculto."
-    } else {
-        "Sensitive values appear as [SCRYPUPPY_SECRET_N]. Preserve every placeholder exactly as received and never try to reconstruct the hidden value."
-    };
-    format!("{language} {format} {evidence} {placeholders}")
-}
-
 fn number_magic_search_sources(
     markdown: &str,
     relevant: &[ScoredCapture],
@@ -5634,7 +5914,12 @@ fn number_magic_search_sources(
         );
     }
 
-    for heading in ["\n## Fontes", "\n## Sources"] {
+    for heading in [
+        "\n## Fontes utilizadas",
+        "\n## Fontes",
+        "\n## Sources used",
+        "\n## Sources",
+    ] {
         if let Some(index) = numbered.find(heading) {
             numbered.truncate(index);
             numbered = numbered.trim_end().to_string();
@@ -5642,9 +5927,9 @@ fn number_magic_search_sources(
     }
 
     let sources_heading = if portuguese {
-        "## Fontes"
+        "## Fontes utilizadas"
     } else {
-        "## Sources"
+        "## Sources used"
     };
     numbered.push_str(&format!("\n\n{sources_heading}\n\n"));
     for (index, item) in relevant.iter().enumerate() {
@@ -5679,10 +5964,15 @@ fn number_magic_search_sources(
 }
 
 fn strip_magic_search_sources(markdown: &str) -> String {
-    let source_index = ["\n## Fontes", "\n## Sources"]
-        .iter()
-        .filter_map(|heading| markdown.find(heading))
-        .min();
+    let source_index = [
+        "\n## Fontes utilizadas",
+        "\n## Fontes",
+        "\n## Sources used",
+        "\n## Sources",
+    ]
+    .iter()
+    .filter_map(|heading| markdown.find(heading))
+    .min();
     source_index
         .map(|index| markdown[..index].trim_end().to_string())
         .unwrap_or_else(|| markdown.trim_end().to_string())
@@ -5691,9 +5981,9 @@ fn strip_magic_search_sources(markdown: &str) -> String {
 fn append_magic_search_sources(body: &str, evidence: &[EvidenceItem], portuguese: bool) -> String {
     let mut markdown = body.trim_end().to_string();
     markdown.push_str(if portuguese {
-        "\n\n## Fontes\n\n"
+        "\n\n## Fontes utilizadas\n\n"
     } else {
-        "\n\n## Sources\n\n"
+        "\n\n## Sources used\n\n"
     });
     for (index, item) in evidence.iter().enumerate() {
         let app = item.app_name.as_deref().unwrap_or(if portuguese {
@@ -5844,49 +6134,6 @@ fn remove_magic_search_evidence_from_document(
     rewrite_magic_search_sources(conn, document_id, Some(rank as usize + 1))
 }
 
-fn render_magic_search_fallback(
-    title: &str,
-    query: &str,
-    relevant: &[ScoredCapture],
-    portuguese: bool,
-) -> String {
-    let mut markdown = if portuguese {
-        format!("# Magic Search — {title}\n\n> Consulta: {query}\n\n## Evidências consolidadas\n\n")
-    } else {
-        format!("# Magic Search — {title}\n\n> Query: {query}\n\n## Consolidated evidence\n\n")
-    };
-    for item in relevant {
-        let capture = &item.capture;
-        markdown.push_str(&format!(
-            "### {} — {}\n\n",
-            capture.captured_at,
-            capture.source_app_name.as_deref().unwrap_or(if portuguese {
-                "Aplicativo desconhecido"
-            } else {
-                "Unknown application"
-            }),
-        ));
-        markdown.push_str(&markdown_fenced_block(&shorten(
-            &redact_sensitive_values(&capture.content_text),
-            1200,
-        )));
-        markdown.push_str(&if portuguese {
-            format!(
-                "\n**Contexto:** {}  \n**Referência:** [capture:{}]\n\n---\n\n",
-                context_label(capture),
-                capture.id
-            )
-        } else {
-            format!(
-                "\n**Context:** {}  \n**Reference:** [capture:{}]\n\n---\n\n",
-                context_label(capture),
-                capture.id
-            )
-        });
-    }
-    markdown
-}
-
 fn markdown_fenced_block(content: &str) -> String {
     let max_backticks = content
         .split(|character| character != '`')
@@ -5895,75 +6142,6 @@ fn markdown_fenced_block(content: &str) -> String {
         .unwrap_or(0);
     let fence = "`".repeat((max_backticks + 1).max(3));
     format!("{fence}text\n{content}\n{fence}\n")
-}
-
-fn build_magic_search_prompt(
-    query: &str,
-    relevant: &[ScoredCapture],
-    mode: MagicResponseMode,
-    portuguese: bool,
-    secret_map: &SecretRedactionMap,
-) -> String {
-    let evidence = relevant
-        .iter()
-        .map(|item| {
-            let capture = &item.capture;
-            format!(
-                "[capture:{}]\n{}: {}\nApp: {}\n{}: {}\n{}: {}\nTags: {}\n{}: {}\nOCR: {}",
-                capture.id,
-                if portuguese { "Data" } else { "Date" },
-                capture.captured_at,
-                secret_map.redact(capture.source_app_name.as_deref().unwrap_or("unknown")),
-                if portuguese { "Contexto" } else { "Context" },
-                secret_map.redact(&context_label(capture)),
-                if portuguese { "Contextos" } else { "Contexts" },
-                secret_map.redact(
-                    &capture
-                        .contexts
-                        .iter()
-                        .map(|context| context.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-                secret_map.redact(&capture.tags.join(", ")),
-                if portuguese { "Texto" } else { "Text" },
-                shorten(&secret_map.redact(&capture.content_text), 1600),
-                capture
-                    .ocr
-                    .as_ref()
-                    .and_then(|ocr| ocr.text.as_deref())
-                    .map(|text| shorten(&secret_map.redact(text), 500))
-                    .unwrap_or_default(),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n---\n\n");
-    let instruction = match (mode, portuguese) {
-        (MagicResponseMode::Direct, true) => {
-            "Responda diretamente, sem seções e sem repetir a pergunta."
-        }
-        (MagicResponseMode::Direct, false) => {
-            "Answer directly, without sections and without repeating the question."
-        }
-        (MagicResponseMode::Brief, true) => "Forneça um resumo curto com no máximo cinco pontos.",
-        (MagicResponseMode::Brief, false) => {
-            "Provide a brief summary with no more than five points."
-        }
-        (MagicResponseMode::Document, true) => {
-            "Gere um documento Markdown condensado e rastreável."
-        }
-        (MagicResponseMode::Document, false) => {
-            "Generate a condensed and traceable Markdown document."
-        }
-    };
-    let safe_query = secret_map.redact(query);
-    if portuguese {
-        format!(
-            "Consulta do usuário:\n{safe_query}\n\nEvidências locais:\n{evidence}\n\n{instruction}"
-        )
-    } else {
-        format!("User query:\n{safe_query}\n\nLocal evidence:\n{evidence}\n\n{instruction}")
-    }
 }
 
 fn list_magic_search_documents(conn: &Connection) -> Result<Vec<MagicSearchListItemDto>, String> {
@@ -6759,21 +6937,46 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         "UPDATE contexts SET normalized_name = lower(trim(name)) WHERE normalized_name = ''",
         [],
     )?;
+    conn.execute("DROP INDEX IF EXISTS idx_contexts_normalized_name", [])?;
+    conn.execute(
+        "INSERT OR IGNORE INTO contexts (id, name, normalized_name, slug, created_at, updated_at)
+         SELECT 'knowledge-base', 'Knowledge Base', 'knowledge base', 'knowledge-base', created_at, updated_at
+         FROM contexts WHERE id = 'content-base'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE contexts SET name = 'Knowledge Base', normalized_name = 'knowledge base', slug = 'knowledge-base'
+         WHERE id = 'knowledge-base'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE captures SET context_id = 'knowledge-base' WHERE context_id = 'content-base'",
+        [],
+    )?;
+    conn.execute(
+        "UPDATE OR IGNORE capture_contexts SET context_id = 'knowledge-base' WHERE context_id = 'content-base'",
+        [],
+    )?;
+    conn.execute(
+        "DELETE FROM capture_contexts WHERE context_id = 'content-base'",
+        [],
+    )?;
+    conn.execute("DELETE FROM contexts WHERE id = 'content-base'", [])?;
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_contexts_normalized_name
-         ON contexts(normalized_name) WHERE id NOT IN ('inbox', 'content-base')",
+         ON contexts(normalized_name) WHERE id NOT IN ('inbox', 'knowledge-base')",
         [],
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO capture_contexts
             (capture_id, context_id, assignment_origin, confidence, created_at)
          SELECT id, context_id, 'manual', NULL, created_at FROM captures
-         WHERE context_id NOT IN ('inbox', 'content-base')",
+         WHERE context_id NOT IN ('inbox', 'knowledge-base')",
         [],
     )?;
     conn.execute(
-        "UPDATE captures SET context_id = CASE WHEN capture_kind = 'reference' THEN 'content-base' ELSE 'inbox' END
-         WHERE context_id NOT IN ('inbox', 'content-base')",
+        "UPDATE captures SET context_id = CASE WHEN capture_kind = 'reference' THEN 'knowledge-base' ELSE 'inbox' END
+         WHERE context_id NOT IN ('inbox', 'knowledge-base')",
         [],
     )?;
     conn.execute_batch(
@@ -6861,11 +7064,11 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO contexts (id, name, normalized_name, slug, created_at, updated_at)
-         VALUES (?, ?, 'content base', ?, ?, ?)",
+         VALUES (?, ?, 'knowledge base', ?, ?, ?)",
         params![
-            CONTENT_BASE_CONTEXT_ID,
-            "Base de conteúdo",
-            "base-de-conteudo",
+            KNOWLEDGE_BASE_CONTEXT_ID,
+            "Knowledge Base",
+            "knowledge-base",
             now,
             now
         ],
@@ -6881,6 +7084,14 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT OR IGNORE INTO settings (key, value) VALUES ('ai_model', 'deepseek-v4-flash')",
         [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('retention_policy', '3_months')",
+        [],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO settings (key, value) VALUES ('retention_started_at', ?)",
+        [now.as_str()],
     )?;
     for key in [
         "clipboard_monitor_enabled",
@@ -7610,7 +7821,7 @@ fn apply_context_suggestions(
             let name = normalized_context_name(&suggestion.name)?;
             let normalized_name = normalize_text(&name);
             if let Some(id) = transaction.query_row(
-                "SELECT id FROM contexts WHERE normalized_name = ? AND id NOT IN ('inbox', 'content-base')",
+                "SELECT id FROM contexts WHERE normalized_name = ? AND id NOT IN ('inbox', 'knowledge-base')",
                 [&normalized_name], |row| row.get(0),
             ).optional().map_err(err)? { id } else {
                 let id = Uuid::new_v4().to_string();
@@ -7661,7 +7872,7 @@ fn list_context_rows(conn: &Connection) -> Result<Vec<ContextDto>, String> {
             "SELECT co.id, co.name, co.normalized_name, co.slug, co.created_at, co.updated_at,
                 COUNT(cc.capture_id) FROM contexts co
          LEFT JOIN capture_contexts cc ON cc.context_id = co.id
-         WHERE co.id NOT IN ('inbox', 'content-base') GROUP BY co.id",
+         WHERE co.id NOT IN ('inbox', 'knowledge-base') GROUP BY co.id",
         )
         .map_err(err)?;
     let contexts = stmt
@@ -8543,6 +8754,9 @@ fn settings_from_conn(conn: &Connection, state: &AppState) -> Result<SettingsDto
             "clipboard_monitor_quick_context_enabled",
             false,
         )?,
+        retention_policy: get_setting(conn, "retention_policy")?
+            .filter(|value| retention_policy_is_valid(value))
+            .unwrap_or_else(default_retention_policy),
     })
 }
 
@@ -8675,7 +8889,7 @@ fn list_contexts_for_markdown(conn: &Connection) -> rusqlite::Result<Vec<Context
                 COUNT(cc.capture_id) AS capture_count
          FROM contexts co
          LEFT JOIN capture_contexts cc ON cc.context_id = co.id
-         WHERE co.id NOT IN ('inbox', 'content-base')
+         WHERE co.id NOT IN ('inbox', 'knowledge-base')
          GROUP BY co.id
          ORDER BY lower(co.name)",
     )?;
@@ -8996,6 +9210,19 @@ pub fn run() {
             clipboard_monitor::start(app.handle().clone(), state.clone(), monitor_handle);
             kick_ocr_worker(app.handle().clone(), state.clone());
 
+            let retention_app = app.handle().clone();
+            let retention_state = state.clone();
+            thread::spawn(move || loop {
+                match run_retention_cleanup(&retention_state, Utc::now()) {
+                    Ok(result) if result.deleted_count > 0 => {
+                        let _ = retention_app.emit("data-reset", Value::Null);
+                    }
+                    Ok(_) => {}
+                    Err(error) => eprintln!("Retention cleanup failed: {error}"),
+                }
+                thread::sleep(RETENTION_CHECK_INTERVAL);
+            });
+
             let local_app = app.handle().clone();
             let local_state = state.clone();
             thread::spawn(move || {
@@ -9096,7 +9323,7 @@ pub fn run() {
                                 thread::spawn(move || {
                                     let state = app_handle.state::<AppState>().inner().clone();
                                     let (kind, context) = if is_reference {
-                                        ("reference", CONTENT_BASE_CONTEXT_ID)
+                                        ("reference", KNOWLEDGE_BASE_CONTEXT_ID)
                                     } else {
                                         ("capture", INBOX_CONTEXT_ID)
                                     };
@@ -9159,6 +9386,8 @@ pub fn run() {
             delete_all_data,
             preview_data_cleanup,
             delete_data_by_filter,
+            preview_retention_change,
+            apply_retention_change,
             get_ai_provider_options,
             get_local_search_status,
             prepare_local_search,
@@ -9166,6 +9395,7 @@ pub fn run() {
             ask_chat,
             get_tag_document,
             export_tag_document,
+            search_magic_items,
             generate_magic_search,
             preview_magic_search,
             list_magic_searches,
@@ -9290,6 +9520,95 @@ mod tests {
         assert!(scores["b"].0 > scores["a"].0);
         assert_eq!(scores["b"].1, vec!["lexical", "semantic"]);
         assert_eq!(scores["c"].1, vec!["semantic"]);
+    }
+
+    #[test]
+    fn document_scope_unions_contexts_knowledge_base_and_inbox_without_duplicates() {
+        let conn = duplicate_test_connection();
+        insert_test_context(&conn, "apollo", "Apollo");
+        insert_test_context(&conn, "other", "Other");
+        let timestamp = now();
+        let apollo = insert_duplicate_test_capture(
+            &conn,
+            "apollo",
+            &timestamp,
+            CaptureOrigin::ExplicitHotkey,
+        );
+        let inbox = insert_duplicate_test_capture(
+            &conn,
+            "inbox",
+            &timestamp,
+            CaptureOrigin::ExplicitHotkey,
+        );
+        let reference = insert_duplicate_test_capture(
+            &conn,
+            "reference",
+            &timestamp,
+            CaptureOrigin::ExplicitHotkey,
+        );
+        let other = insert_duplicate_test_capture(
+            &conn,
+            "other",
+            &timestamp,
+            CaptureOrigin::ExplicitHotkey,
+        );
+        conn.execute(
+            "UPDATE captures SET capture_kind = 'reference', context_id = ? WHERE id = ?",
+            params![KNOWLEDGE_BASE_CONTEXT_ID, reference],
+        )
+        .unwrap();
+        for (capture_id, context_id) in [
+            (&apollo, "apollo"),
+            (&reference, "apollo"),
+            (&other, "other"),
+        ] {
+            conn.execute(
+                "INSERT INTO capture_contexts (capture_id, context_id, assignment_origin, confidence, created_at)
+                 VALUES (?, ?, 'manual', NULL, ?)",
+                params![capture_id, context_id, timestamp],
+            ).unwrap();
+        }
+
+        let captures = load_magic_search_captures(
+            &conn,
+            &MagicSearchRequest {
+                query: "Apollo".into(),
+                context_ids: vec!["apollo".into()],
+                include_knowledge_base: Some(true),
+                include_inbox: Some(true),
+                context_id: None,
+                tag: None,
+                date_from: None,
+                date_to: None,
+                limit: None,
+                previous_document_id: None,
+                response_mode: Some("document".into()),
+            },
+        )
+        .unwrap();
+        let ids = captures
+            .iter()
+            .map(|capture| capture.id.as_str())
+            .collect::<HashSet<_>>();
+        assert_eq!(ids.len(), 3);
+        assert!(ids.contains(apollo.as_str()));
+        assert!(ids.contains(inbox.as_str()));
+        assert!(ids.contains(reference.as_str()));
+        assert!(!ids.contains(other.as_str()));
+    }
+
+    #[test]
+    fn provider_batching_preserves_oversized_text_and_document_title() {
+        let text = format!("first\n\n{}\n\nlast", "x".repeat(PROVIDER_BATCH_CHARS + 25));
+        let chunks = split_provider_text(&text, PROVIDER_BATCH_CHARS);
+        assert!(chunks.len() >= 2);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.chars().count() <= PROVIDER_BATCH_CHARS));
+        assert_eq!(
+            extract_document_title("intro\n# Application Apollo\nbody"),
+            Some("Application Apollo".into())
+        );
     }
 
     #[test]
@@ -9625,7 +9944,7 @@ mod tests {
     }
 
     #[test]
-    fn paste_pages_exclude_content_base_references_before_pagination() {
+    fn paste_pages_exclude_knowledge_base_references_before_pagination() {
         let conn = duplicate_test_connection();
         let timestamp = now();
         for index in 0..12 {
@@ -9645,9 +9964,9 @@ mod tests {
             );
             conn.execute(
                 "UPDATE captures SET capture_kind = 'reference', context_id = ? WHERE id = ?",
-                params![CONTENT_BASE_CONTEXT_ID, id],
+                params![KNOWLEDGE_BASE_CONTEXT_ID, id],
             )
-            .expect("test reference should move to Content Base");
+            .expect("test reference should move to Knowledge Base");
         }
 
         let first_page = CaptureFilter {
@@ -9674,6 +9993,111 @@ mod tests {
             list_captures_from_conn(&conn, &second_page).expect("second paste page should load");
         assert_eq!(items.len(), 2);
         assert!(items.iter().all(|capture| capture.kind != "reference"));
+    }
+
+    #[test]
+    fn retention_cutoffs_support_days_calendar_months_and_never() {
+        let at = DateTime::parse_from_rfc3339("2026-07-19T12:00:00+00:00")
+            .expect("test timestamp")
+            .with_timezone(&Utc);
+        assert_eq!(
+            retention_cutoff_at("3_days", at)
+                .expect("days cutoff")
+                .expect("finite cutoff")
+                .to_rfc3339(),
+            "2026-07-16T12:00:00+00:00"
+        );
+        assert_eq!(
+            retention_cutoff_at("3_months", at)
+                .expect("months cutoff")
+                .expect("finite cutoff")
+                .to_rfc3339(),
+            "2026-04-19T12:00:00+00:00"
+        );
+        assert!(retention_cutoff_at("never", at)
+            .expect("never policy")
+            .is_none());
+        assert!(retention_cutoff_at("invalid", at).is_err());
+    }
+
+    #[test]
+    fn retention_excludes_knowledge_base_and_honors_existing_history_boundary() {
+        let mut conn = duplicate_test_connection();
+        let state = test_state();
+        let at = DateTime::parse_from_rfc3339("2026-07-19T12:00:00+00:00")
+            .expect("test timestamp")
+            .with_timezone(&Utc);
+        let expired_at = (at - chrono::TimeDelta::days(10)).to_rfc3339();
+        let recent_at = (at - chrono::TimeDelta::hours(12)).to_rfc3339();
+        let expired = insert_duplicate_test_capture(
+            &conn,
+            "expired regular capture",
+            &expired_at,
+            CaptureOrigin::ClipboardMonitor,
+        );
+        insert_duplicate_test_capture(
+            &conn,
+            "recent regular capture",
+            &recent_at,
+            CaptureOrigin::ClipboardMonitor,
+        );
+        let reference = insert_duplicate_test_capture(
+            &conn,
+            "durable reference",
+            &expired_at,
+            CaptureOrigin::ExplicitHotkey,
+        );
+        conn.execute(
+            "UPDATE captures SET capture_kind = 'reference', context_id = ? WHERE id = ?",
+            params![KNOWLEDGE_BASE_CONTEXT_ID, reference],
+        )
+        .expect("reference should move to Knowledge Base");
+        let imported = insert_duplicate_test_capture(
+            &conn,
+            "imported file",
+            &expired_at,
+            CaptureOrigin::FileImport,
+        );
+
+        let candidates =
+            retention_candidate_ids(&conn, "3_days", None, at).expect("retention candidates");
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].0, expired);
+        assert!(retention_candidate_ids(
+            &conn,
+            "3_days",
+            Some(&(at - chrono::TimeDelta::days(5)).to_rfc3339()),
+            at,
+        )
+        .expect("grandfathered candidates")
+        .is_empty());
+
+        let ids = candidates.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+        let result = delete_capture_ids_from_conn(&mut conn, &state, &ids)
+            .expect("expired capture should delete");
+        assert_eq!(result.deleted_count, 1);
+        assert!(get_capture_by_id(&conn, &expired).is_err());
+        assert_eq!(
+            get_capture_by_id(&conn, &reference)
+                .expect("Knowledge Base reference should remain")
+                .kind,
+            "reference"
+        );
+        assert!(get_capture_by_id(&conn, &imported).is_ok());
+    }
+
+    #[test]
+    fn retention_defaults_to_three_months_for_existing_databases() {
+        let conn = duplicate_test_connection();
+        assert_eq!(
+            get_setting(&conn, "retention_policy")
+                .expect("retention setting")
+                .as_deref(),
+            Some(DEFAULT_RETENTION_POLICY)
+        );
+        assert!(get_setting(&conn, "retention_started_at")
+            .expect("retention start")
+            .is_some());
     }
 
     #[test]
@@ -9871,6 +10295,7 @@ mod tests {
             quick_context_show_preview: true,
             quick_context_show_recent: true,
             onboarding_completed: false,
+            retention_policy: DEFAULT_RETENTION_POLICY.into(),
             clipboard_monitor_enabled: false,
             clipboard_monitor_capture_screenshots: false,
             clipboard_monitor_quick_context_enabled: false,

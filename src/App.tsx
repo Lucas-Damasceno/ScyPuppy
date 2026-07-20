@@ -7,9 +7,10 @@ import { formatAppError, formatAppMessage } from "./appMessages";
 import { MarkdownDocument } from "./components/MarkdownDocument";
 import { OnboardingTutorial } from "./components/OnboardingTutorial";
 import { BrandMark } from "./components/BrandMark";
-import { AiControls, ClipboardCaptureControls, QuickContextControls, SettingsSaveFeedback, StartupAndShortcutsControls } from "./components/SettingsControls";
+import { AiControls, ClipboardCaptureControls, QuickContextControls, RetentionControls, SettingsSaveFeedback, StartupAndShortcutsControls } from "./components/SettingsControls";
 import { useAutoCloseTimer } from "./hooks/useAutoCloseTimer";
 import { useSettingsCoordinator } from "./hooks/useSettingsCoordinator";
+import { useWindowTheme } from "./hooks/useWindowTheme";
 import { captureDisplayText, normalizeLanguage, translate, translateLegacyGeneratedContent, type AppLanguage } from "./i18n";
 import { LiteMagicPalette, LiteMainApp } from "./LiteApp";
 import { appDefaultSettings } from "./config/defaultSettings";
@@ -22,7 +23,7 @@ import type {
 import "./App.css";
 
 const inboxId = "inbox";
-const contentBaseId = "content-base";
+const knowledgeBaseId = "knowledge-base";
 const pastePageSize = 10;
 
 type ConfirmationOptions = {
@@ -302,10 +303,36 @@ const pastePreviewItems = [
   { id: "preview-3", content_text: "Ctrl + Shift + V opens ScryPuppy's quick history", source_app_name: "ScryPuppy", captured_at: new Date(Date.now() - 3_600_000).toISOString(), kind: "reference", assets: [] },
 ] as unknown as Capture[];
 
+const quickContextPreviewCapture: Capture = {
+  id: "quick-context-preview",
+  content_text: "The capture popup now follows the Windows color theme.",
+  captured_at: new Date().toISOString(),
+  source_app_name: "Visual Studio Code",
+  source_app_id: null,
+  source_process_id: null,
+  source_process_path: null,
+  window_title: null,
+  window_id: null,
+  platform: "windows",
+  kind: "capture",
+  content_kind: "text",
+  metadata: {},
+  assets: [],
+  representations: [],
+  files: [],
+  clipboard_formats: [],
+  tags: [],
+  entities: [],
+  ocr: null,
+  contexts: [],
+};
+
 const defaultSettings = appDefaultSettings;
 
 function QuickContextPanel() {
-  const [capture, setCapture] = useState<Capture | null>(null);
+  const windowTheme = useWindowTheme();
+  const isDocsPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("docs-preview");
+  const [capture, setCapture] = useState<Capture | null>(isDocsPreview ? quickContextPreviewCapture : null);
   const [contexts, setContexts] = useState<Context[]>([]);
   const [recentContexts, setRecentContexts] = useState<Context[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -407,7 +434,7 @@ function QuickContextPanel() {
     finally { setSavingContextId(null); }
   }
 
-  if (!capture) return <main className="quick-context-shell" />;
+  if (!capture) return <main className="quick-context-shell" data-theme={windowTheme} />;
   const normalizedSearch = search.trim().toLowerCase();
   const defaultChoices = settings.quick_context_show_recent && recentContexts.length > 0
     ? [...capture.contexts, ...recentContexts].filter((context, index, values) => values.findIndex((item) => item.id === context.id) === index)
@@ -433,7 +460,7 @@ function QuickContextPanel() {
   }
 
   return (
-    <main className="quick-context-shell">
+    <main className="quick-context-shell" data-theme={windowTheme}>
       <section className="quick-context-panel" aria-label={tr("Quick context panel")} onPointerDownCapture={registerInteraction} onKeyDownCapture={registerInteraction} onFocusCapture={registerInteraction}>
         <header>
           <div className="quick-context-brand"><BrandMark /></div>
@@ -466,7 +493,7 @@ function QuickContextPanel() {
 function MainApp() {
   const [contexts, setContexts] = useState<Context[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [counts, setCounts] = useState<LibraryCounts>({ all: 0, inbox: 0, content_base: 0 });
+  const [counts, setCounts] = useState<LibraryCounts>({ all: 0, inbox: 0, knowledge_base: 0 });
   const [captures, setCaptures] = useState<Capture[]>([]);
   const [selectedContextId, setSelectedContextId] = useState<string>(inboxId);
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -593,8 +620,8 @@ function MainApp() {
   const selectedContext = contexts.find((context) => context.id === selectedContextId);
   const scopeTitle = selectedContextId === "all"
     ? tr("All captures")
-    : selectedContextId === contentBaseId
-      ? tr("Content Base")
+    : selectedContextId === knowledgeBaseId
+      ? tr("Knowledge Base")
       : selectedContextId === inboxId ? "Inbox" : selectedContext?.name ?? tr("Contexts");
 
   const refresh = useCallback(async (nextContextId = selectedContextId) => {
@@ -605,6 +632,7 @@ function MainApp() {
       tag: selectedCategory,
       limit: 200,
       offset: 0,
+      exclude_references: nextContextId === "all",
     };
 
     const result = await api.loadWorkspace(filter);
@@ -687,14 +715,14 @@ function MainApp() {
       const isReference = event.payload.capture.kind === "reference";
       setStatus(isAutomatic
         ? "Clipboard copy registered automatically."
-        : isReference ? "Reference saved to the Content Base." : "Capture saved with the global shortcut.");
+        : isReference ? "Reference saved to the Knowledge Base." : "Capture saved with the global shortcut.");
       if (isAutomatic) {
       refresh().catch((error) => setStatus(formatAppError(error, tr)));
         return;
       }
-      setSelectedContextId(isReference ? contentBaseId : inboxId);
+      setSelectedContextId(isReference ? knowledgeBaseId : inboxId);
       setSelectedCaptureId(event.payload.capture.id);
-      refresh(isReference ? contentBaseId : inboxId).catch((error) => setStatus(formatAppError(error, tr)));
+      refresh(isReference ? knowledgeBaseId : inboxId).catch((error) => setStatus(formatAppError(error, tr)));
     }).then((unlisten) => unlisteners.push(unlisten));
 
     listen<CaptureErrorEvent>("capture-error", (event) => {
@@ -1136,15 +1164,15 @@ function MainApp() {
               <small>{counts.inbox}</small>
             </button>
             <button
-              className={`sidebar-item content-base-item ${selectedContextId === contentBaseId && !selectedCategory ? "is-selected" : ""}`}
+              className={`sidebar-item knowledge-base-item ${selectedContextId === knowledgeBaseId && !selectedCategory ? "is-selected" : ""}`}
               onClick={() => {
                 setSelectedCategory(null);
-                selectContext(contentBaseId);
+                selectContext(knowledgeBaseId);
               }}
             >
               <Icon name="database" />
-              <span>{tr("Content Base")}</span>
-              <small>{counts.content_base}</small>
+              <span>{tr("Knowledge Base")}</span>
+              <small>{counts.knowledge_base}</small>
             </button>
             <button className="sidebar-item magic-sidebar-item" onClick={openMagicLibrary}>
               <Icon name="sparkles" />
@@ -1296,7 +1324,7 @@ function MainApp() {
                   <p className="capture-window">{capture.window_title ?? tr("Untitled window")}</p>
                   <p className="capture-excerpt">{captureDisplayText(language, capture)}</p>
                   <div className="capture-row-footer">
-                    <span>{capture.contexts.map((context) => context.name).join(", ") || (capture.kind === "reference" ? tr("Content Base") : "Inbox")}</span>
+                    <span>{capture.contexts.map((context) => context.name).join(", ") || (capture.kind === "reference" ? tr("Knowledge Base") : "Inbox")}</span>
                     {capture.kind === "reference" && <code>{tr("reference")}</code>}
                     {capture.assets.length > 0 && <Icon name="image" size={13} />}
                     {capture.tags.slice(0, 2).map((tag) => <code key={tag}>{tr(tag)}</code>)}
@@ -1504,7 +1532,7 @@ function MainApp() {
                 <details className="metadata-disclosure">
                   <summary><Icon name="info" size={15} /> {tr("Capture information")} <Icon name="chevron" size={13} /></summary>
                   <div className="metadata-grid">
-                    <Metadata label={tr("Contexts")} value={selectedCapture.contexts.map((context) => context.name).join(", ") || (selectedCapture.kind === "reference" ? tr("Content Base") : "Inbox")} />
+                    <Metadata label={tr("Contexts")} value={selectedCapture.contexts.map((context) => context.name).join(", ") || (selectedCapture.kind === "reference" ? tr("Knowledge Base") : "Inbox")} />
                     <Metadata label="Application ID" value={selectedCapture.source_app_id} />
                     <Metadata label="PID" value={selectedCapture.source_process_id?.toString() ?? null} />
                     <Metadata label={tr("Executable")} value={selectedCapture.source_process_path} />
@@ -1733,6 +1761,18 @@ function MainApp() {
                   <Icon name="database" />
                   <div><strong>{tr("Protected local data")}</strong><span>{tr("SQLite and contexts are encrypted at rest")}</span></div>
                 </div>
+                <RetentionControls
+                  settings={settings}
+                  tr={tr}
+                  onApplied={async (result) => {
+                    setPersisted(result.settings);
+                    if (result.deleted_count > 0) {
+                      setSelectedCaptureId(null);
+                      await refresh(selectedContextId);
+                    }
+                  }}
+                  onStatus={setStatus}
+                />
                 <div className="storage-path"><Icon name="folder" size={14} /><code>{settings?.data_dir ?? tr("Loading...")}</code></div>
                 <div className="settings-actions">
                   <button className="secondary-button wide" onClick={resyncMarkdown}>

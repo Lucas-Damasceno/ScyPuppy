@@ -16,7 +16,7 @@ type LiteWorkspaceQuery = {
   page: number;
 };
 
-const emptyCounts: LibraryCounts = { all: 0, inbox: 0, content_base: 0 };
+const emptyCounts: LibraryCounts = { all: 0, inbox: 0, knowledge_base: 0 };
 const capturePageSize = 50;
 
 function toCaptureFilter(query: LiteWorkspaceQuery): CaptureFilter {
@@ -26,6 +26,7 @@ function toCaptureFilter(query: LiteWorkspaceQuery): CaptureFilter {
     tag: null,
     limit: capturePageSize,
     offset: Math.max(0, query.page) * capturePageSize,
+    exclude_references: query.contextId === null,
   };
 }
 

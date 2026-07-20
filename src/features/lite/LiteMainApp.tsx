@@ -24,6 +24,7 @@ import { DataCleanupDialog, formatBytes } from "./DataCleanupDialog";
 import { SmartContextDialog } from "./SmartContextDialog";
 
 const capturePageSize = 50;
+const knowledgeBaseId = "knowledge-base";
 
 function captureTypeIcon(capture: Capture): LiteIconName | null {
   if (capture.content_kind === "files") {
@@ -262,6 +263,9 @@ export function LiteMainApp() {
           <button className={activeView === "captures" && !selectedContextId ? "is-selected" : ""} onClick={() => { setActiveView("captures"); setCapturePage(0); setSelectedContextId(null); }}>
             <LiteIcon name="layers" /><span>{tr("Everything")}</span><small>{counts.all}</small>
           </button>
+          <button className={activeView === "captures" && selectedContextId === knowledgeBaseId ? "is-selected" : ""} onClick={() => { setActiveView("captures"); setCapturePage(0); setSelectedContextId(knowledgeBaseId); }}>
+            <LiteIcon name="database" /><span>{tr("Knowledge Base")}</span><small>{counts.knowledge_base}</small>
+          </button>
           <p>{tr("Contexts")}</p>
           {contexts.map((context) => (
             <button key={context.id} className={activeView === "captures" && selectedContextId === context.id ? "is-selected" : ""} onClick={() => { setActiveView("captures"); setCapturePage(0); setSelectedContextId(context.id); }}>
@@ -314,8 +318,8 @@ export function LiteMainApp() {
       /> : <section className="lite-workspace">
         <header className="lite-topbar">
           <div>
-            <span className="lite-eyebrow">{selectedContextId ? tr("Context") : tr("Clipboard history")}</span>
-            <h1>{selectedContext?.name ?? tr("Everything you copied")}</h1>
+            <span className="lite-eyebrow">{selectedContextId === knowledgeBaseId ? tr("Durable references") : selectedContextId ? tr("Context") : tr("Clipboard history")}</span>
+            <h1>{selectedContextId === knowledgeBaseId ? tr("Knowledge Base") : selectedContext?.name ?? tr("Everything you copied")}</h1>
           </div>
           <div className="lite-topbar-actions">
             {selectedContext && <button className="lite-context-automation-button" onClick={() => setIsSmartContextOpen(true)}>
@@ -457,6 +461,14 @@ export function LiteMainApp() {
         onClearCredential={clearAiApiKey}
         onRetry={() => void retrySettings()}
         onDeleteAll={deleteAllData}
+        onRetentionApplied={async (result) => {
+          setPersisted(result.settings);
+          if (result.deleted_count > 0) {
+            setDetail(null);
+            setCapturePage(0);
+            await refreshAll({ contextId: selectedContextId, search, page: 0 });
+          }
+        }}
         onClose={() => setIsSettingsOpen(false)}
         onOpenTutorial={() => { setIsSettingsOpen(false); setIsOnboardingOpen(true); }}
         onStatus={setStatus}

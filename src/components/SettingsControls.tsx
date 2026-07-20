@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from "react";
+import * as api from "../api/tauri";
 import { formatAppError, type MessageParams } from "../appMessages";
-import type { AiProviderOption, Settings } from "../types";
+import type { AiProviderOption, RetentionApplyResult, RetentionPolicy, RetentionPreview, Settings } from "../types";
 import type { SettingsSaveState } from "../hooks/useSettingsCoordinator";
 
 type Translate = (english: string, variables?: MessageParams) => string;
@@ -39,9 +40,119 @@ export function StartupAndShortcutsControls({ settings, tr, onPatch }: { setting
   return <div className="settings-control-stack">
     <ToggleSetting label={tr("Start with Windows")} checked={settings.launch_at_startup} onChange={(checked) => onPatch({ launch_at_startup: checked })} />
     <ReadOnlyShortcut label={tr("Global shortcut")} value={formatHotkey(settings.hotkey)} />
+    <ReadOnlyShortcut label={tr("Knowledge Base shortcut")} value={formatHotkey(settings.reference_hotkey)} />
     <ReadOnlyShortcut label={tr("Paste from history")} value={formatHotkey(settings.paste_hotkey)} />
     <ReadOnlyShortcut label={tr("Search with ScryPuppy")} value="Ctrl + Shift + F" />
   </div>;
+}
+
+const retentionOptions: Array<{ value: RetentionPolicy; label: string }> = [
+  { value: "1_day", label: "1 day" },
+  { value: "3_days", label: "3 days" },
+  { value: "7_days", label: "7 days" },
+  { value: "1_month", label: "1 month" },
+  { value: "3_months", label: "3 months" },
+  { value: "6_months", label: "6 months" },
+  { value: "12_months", label: "12 months" },
+  { value: "never", label: "Never delete" },
+];
+
+export function RetentionControls({ settings, tr, onApplied, onStatus }: {
+  settings: Settings;
+  tr: Translate;
+  onApplied: (result: RetentionApplyResult) => void | Promise<void>;
+  onStatus: (message: string) => void;
+}) {
+  const [draftPolicy, setDraftPolicy] = useState<RetentionPolicy>(settings.retention_policy);
+  const [pending, setPending] = useState<{ policy: RetentionPolicy; preview: RetentionPreview } | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setDraftPolicy(settings.retention_policy), [settings.retention_policy]);
+
+  async function selectPolicy(policy: RetentionPolicy) {
+    setDraftPolicy(policy);
+    if (policy === settings.retention_policy) return;
+    setBusy(true);
+    try {
+      const preview = await api.previewRetentionChange(policy);
+      if (preview.capture_count === 0) {
+        const result = await api.applyRetentionChange(policy, "delete", preview.selection_token);
+        await onApplied(result);
+        onStatus(tr("History retention updated."));
+      } else {
+        setPending({ policy, preview });
+      }
+    } catch (error) {
+      setDraftPolicy(settings.retention_policy);
+      onStatus(formatAppError(error, tr));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function applyPolicy(existingAction: "delete" | "keep") {
+    if (!pending) return;
+    setBusy(true);
+    try {
+      const result = await api.applyRetentionChange(pending.policy, existingAction, pending.preview.selection_token);
+      await onApplied(result);
+      setPending(null);
+      onStatus(existingAction === "delete"
+        ? tr("Deleted {count} expired items and reclaimed up to {size}.", { count: result.deleted_count, size: formatRetentionBytes(result.reclaimed_bytes) })
+        : tr("History retention updated. Existing items were kept."));
+    } catch (error) {
+      onStatus(formatAppError(error, tr));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function cancelPending() {
+    if (busy) return;
+    setPending(null);
+    setDraftPolicy(settings.retention_policy);
+  }
+
+  return <>
+    <div className="settings-control-stack">
+      <label>
+        <span>{tr("Keep clipboard history for")}</span>
+        <select value={draftPolicy} disabled={busy} onChange={(event) => void selectPolicy(event.currentTarget.value as RetentionPolicy)}>
+          {retentionOptions.map((option) => <option key={option.value} value={option.value}>{tr(option.label)}</option>)}
+        </select>
+      </label>
+      <span className="settings-inline-help">{tr("Expired items are deleted automatically. Knowledge Base items are always kept.")}</span>
+    </div>
+    {pending && <div className="modal-backdrop confirmation-backdrop" onMouseDown={(event) => { if (event.currentTarget === event.target) cancelPending(); }}>
+      <section className="settings-modal confirmation-modal" role="alertdialog" aria-modal="true" aria-labelledby="retention-impact-title" aria-describedby="retention-impact-description">
+        <header>
+          <div className="confirmation-icon" aria-hidden="true">!</div>
+          <div><span className="eyebrow">{tr("History retention")}</span><h2 id="retention-impact-title">{tr("Apply retention to existing history?")}</h2></div>
+          <button className="icon-button" disabled={busy} onClick={cancelPending} aria-label={tr("Close")}>{"\u00d7"}</button>
+        </header>
+        <div className="confirmation-body">
+          <p id="retention-impact-description">{tr("{count} items are already older than the new limit and use up to {size} of local storage.", { count: pending.preview.capture_count, size: formatRetentionBytes(pending.preview.reclaimable_bytes) })}</p>
+          <p>{tr("Keeping them makes the new rule apply only to captures saved after this change. You can still remove kept items manually.")}</p>
+          <div className="confirmation-notice">{tr("Knowledge Base items are not included and will not be deleted.")}</div>
+        </div>
+        <footer>
+          <span>{tr("Choose how to apply the new limit")}</span>
+          <div className="confirmation-actions">
+            <button className="secondary-button" disabled={busy} onClick={cancelPending}>{tr("Cancel")}</button>
+            <button className="secondary-button" disabled={busy} onClick={() => void applyPolicy("keep")}>{tr("Keep existing items")}</button>
+            <button className="confirmation-danger-button" disabled={busy} onClick={() => void applyPolicy("delete")}>{tr("Delete now")}</button>
+          </div>
+        </footer>
+      </section>
+    </div>}
+  </>;
+}
+
+function formatRetentionBytes(bytes: number) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
 export function AiControls({ settings, options, tr, onPatch, onSaveCredential, onClearCredential }: {

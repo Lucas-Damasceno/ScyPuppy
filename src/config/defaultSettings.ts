@@ -22,6 +22,7 @@ const baseSettings: Settings = {
   quick_context_show_preview: true,
   quick_context_show_recent: true,
   onboarding_completed: false,
+  retention_policy: "3_months",
 };
 
 export function createDefaultSettings(overrides: Partial<Settings> = {}): Settings {

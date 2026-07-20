@@ -103,8 +103,8 @@ export function DataCleanupDialog({ contexts, language, onClose, onDeleted, onEr
     ? tr("Every context")
     : filter.context_id === "inbox"
       ? tr("Inbox")
-      : filter.context_id === "content-base"
-        ? tr("Content Base")
+      : filter.context_id === "knowledge-base"
+        ? tr("Knowledge Base")
         : contexts.find((context) => context.id === filter.context_id)?.name ?? tr("Unknown context");
 
   return <div className="lite-modal-backdrop" onMouseDown={(event) => {
@@ -153,7 +153,7 @@ export function DataCleanupDialog({ contexts, language, onClose, onDeleted, onEr
           }}>
             <option value="all">{tr("Every context")}</option>
             <option value="inbox">{tr("Inbox")}</option>
-            <option value="content-base">{tr("Content Base")}</option>
+            <option value="knowledge-base">{tr("Knowledge Base")}</option>
             {contexts.map((context) => <option key={context.id} value={context.id}>{context.name}</option>)}
           </select></label>
         </section>

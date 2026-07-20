@@ -50,15 +50,15 @@ The Context picker searches only the local encrypted library. It supports filter
 
 ### Ask a focused question or create a document
 
-Quick answers and document creation are separate modes. Quick answers expose up to five ranked captures so every source can be inspected independently. Document mode adds Context, time period, and evidence preview controls before generation.
+Semantic search and document creation are separate modes. Search combines local E5 and exact-text ranking, returns 20 inspectable captures at a time, and never calls an AI provider. Document mode selects Contexts, Knowledge Base, Inbox, and a time period before generation.
 
 ![Ask ScryPuppy document mode](docs/screenshots/scrypuppy-ask-document.png)
 
-### Choose Local beta or an AI provider
+### Configure local search and document AI independently
 
-Magic Search can run entirely on-device with the optional **Multilingual E5 Small** model, or use the configured AI provider after local evidence retrieval. The radio selector makes the active engine explicit.
+Magic Search uses the optional **Multilingual E5 Small** model together with FTS5 entirely on-device. Document creation is independent: it sends every selected provider-safe text item and metadata record to the configured AI provider, processing large scopes in traceable batches.
 
-The main installer does not include the model. Local beta becomes available only after the user starts the runtime download in Settings and the first library index finishes. Failed downloads can be retried later, and provider mode remains available throughout.
+The main installer does not include the model. Semantic search becomes available only after the user starts the runtime download in Settings and the first library index finishes. Document creation does not require E5, but it requires a configured provider credential and does not fall back to local synthesis.
 
 ![Magic Search Local beta settings](docs/screenshots/scrypuppy-settings.png)
 
@@ -76,8 +76,8 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 - Smart Context automations route new captures locally by application, content type, text or OCR, file extension, file path, and window title.
 - Selective cleanup previews and permanently removes captures by content type, period, and Context without deleting settings, documents, or credentials.
 - Unified Local Search and Magic Search entry point.
-- Optional local Magic Search beta combines SQLite FTS5 and Multilingual E5 Small rankings with reciprocal-rank fusion.
-- Quick answers keep up to five ranked evidence items one click away.
+- Local Magic Search combines SQLite FTS5 and Multilingual E5 Small rankings with reciprocal-rank fusion and paginates inspectable results.
+- Provider-backed document creation sends the complete selected safe-text scope, batches large inputs, and preserves source snapshots.
 - Quick Paste history available from any application.
 - Editable, versioned Markdown documents with durable evidence snapshots.
 - SQLCipher database encryption and Windows Credential Manager integration.
@@ -92,9 +92,9 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 - AI is invoked only after an explicit user action.
 - Images and screenshots are never sent to AI providers.
 - File bytes, executable contents, complete filesystem paths, and private clipboard formats are never sent to AI providers.
-- Explicit AI requests may include bounded text evidence and relevant locally extracted OCR text. Recognized API keys and tokens are replaced with opaque placeholders before every provider request.
-- Magic Search can instead run entirely locally with Multilingual E5 Small. Selecting local mode does not start a download; the user must explicitly download the model in Settings and wait for the first library index to finish.
-- The main installer does not contain the embedding model. A failed runtime download leaves Local Magic Search unavailable and can be retried later; provider mode remains available.
+- Explicit document requests include all provider-safe text, textual representations, OCR, source metadata, Contexts, tags, entities, and safe file metadata in the selected scope. Recognized API keys and tokens are replaced with opaque placeholders before every provider request.
+- Magic Search retrieval runs locally with Multilingual E5 Small and FTS5. Enabling search does not start a download; the user must explicitly download the model in Settings and wait for the first library index to finish.
+- The main installer does not contain the embedding model. A failed runtime download leaves semantic Magic Search unavailable but does not block provider-backed document creation.
 - For generated documents, placeholders are restored only after the provider response returns, on the user's device. Local documents and exported Markdown files may therefore contain the original credentials and should be handled carefully.
 - Automatic screenshots and automatic Quick Context prompts remain separate opt-ins.
 
@@ -103,12 +103,14 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 
 The exact application-data directory is shown in Settings. The main workspace trash action can remove a narrowly filtered set of captures after a count and storage preview. During uninstall, the user can choose whether to keep or remove ScryPuppy data.
 
+Clipboard history retention defaults to three months and can be changed in Settings to one, three, or seven days; one, three, six, or twelve months; or never. When a new limit affects existing history, ScryPuppy previews the impact and lets the user delete those items immediately or keep them outside the automatic policy. Knowledge Base references and imported files are never removed by automatic retention.
+
 ## Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl + Shift + C` | Save a regular capture |
-| `Ctrl + Shift + S` | Save a durable reference |
+| `Ctrl + Shift + S` | Save selected text or an image to Knowledge Base |
 | `Ctrl + Shift + V` | Open Quick Paste history |
 
 After an explicit capture, Quick Context can assign one or several Contexts. The capture is saved before that panel appears, so dismissing the panel never discards it.
