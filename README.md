@@ -103,12 +103,14 @@ See [prints.md](prints.md) for the complete UI reference and onboarding gallery.
 
 The exact application-data directory is shown in Settings. The main workspace trash action can remove a narrowly filtered set of captures after a count and storage preview. During uninstall, the user can choose whether to keep or remove ScryPuppy data.
 
+Clipboard history retention defaults to three months and can be changed in Settings to one, three, or seven days; one, three, six, or twelve months; or never. When a new limit affects existing history, ScryPuppy previews the impact and lets the user delete those items immediately or keep them outside the automatic policy. Knowledge Base references and imported files are never removed by automatic retention.
+
 ## Shortcuts
 
 | Shortcut | Action |
 | --- | --- |
 | `Ctrl + Shift + C` | Save a regular capture |
-| `Ctrl + Shift + S` | Save a durable reference |
+| `Ctrl + Shift + S` | Save selected text or an image to Knowledge Base |
 | `Ctrl + Shift + V` | Open Quick Paste history |
 
 After an explicit capture, Quick Context can assign one or several Contexts. The capture is saved before that panel appears, so dismissing the panel never discards it.

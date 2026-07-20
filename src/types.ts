@@ -13,7 +13,7 @@ export type ContextAssignment = Context & {
   assigned_at: string;
 };
 export type Category = { tag: string; capture_count: number };
-export type LibraryCounts = { all: number; inbox: number; content_base: number };
+export type LibraryCounts = { all: number; inbox: number; knowledge_base: number };
 export type CaptureAsset = { id: string; kind: string; path: string | null; status: string; error: string | null; created_at: string };
 export type CaptureRepresentation = {
   id: string; kind: "plain_text" | "html" | "rich_text" | "url" | "image" | "files" | string;
@@ -47,7 +47,9 @@ export type Settings = {
   quick_context_enabled: boolean; quick_context_after_reference: boolean; quick_context_timeout_seconds: number;
   quick_context_show_preview: boolean; quick_context_show_recent: boolean;
   onboarding_completed: boolean;
+  retention_policy: RetentionPolicy;
 };
+export type RetentionPolicy = "1_day" | "3_days" | "7_days" | "1_month" | "3_months" | "6_months" | "12_months" | "never";
 export type MagicSearchEngine = "local" | "provider";
 export type LocalSearchPhase = "not_downloaded" | "downloading" | "indexing" | "ready" | "error" | "removing";
 export type LocalSearchStatus = {
@@ -114,7 +116,9 @@ export type DataCleanupPreview = {
   newest_captured_at: string | null;
 };
 export type DataCleanupResult = { deleted_count: number; reclaimed_bytes: number };
-export type CaptureFilter = { context_id: string | null; search: string | null; tag: string | null; limit: number; offset: number };
+export type RetentionPreview = DataCleanupPreview;
+export type RetentionApplyResult = { settings: Settings; deleted_count: number; reclaimed_bytes: number };
+export type CaptureFilter = { context_id: string | null; search: string | null; tag: string | null; limit: number; offset: number; exclude_references?: boolean };
 export type CapturePage = { items: Capture[]; total: number };
 export type ChatRequest = { query: string; context_id: string | null; app: string | null; date_from: string | null; date_to: string | null; limit: number };
 export type TagDocument = {
