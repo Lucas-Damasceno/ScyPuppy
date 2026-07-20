@@ -1135,12 +1135,29 @@
 .lite-magic-form input:disabled { opacity: .55; cursor: not-allowed; }
 .lite-magic-form > button { display: inline-flex; width: auto; min-width: 58px; height: var(--ui-icon-button-size); align-items: center; justify-content: center; gap: 5px; padding: 0 10px; border: 0; border-radius: var(--ui-radius-control); background: var(--lite-accent); color: #fff; font: inherit; font-size: 10px; font-weight: 720; cursor: pointer; }
 .lite-magic-form > button:disabled { opacity: .38; cursor: default; }
-.lite-document-scope { display: grid; grid-template-columns: minmax(135px, .8fr) minmax(120px, .7fr) 1fr; align-items: end; gap: 8px; margin: 9px 18px 0; }
-.lite-document-scope label { display: grid; gap: 4px; color: var(--lite-muted); font-size: 8px; font-weight: 650; }
+.lite-document-scope { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(110px, .55fr) minmax(180px, 1fr); align-items: end; gap: 8px; margin: 9px 18px 0; }
+.lite-document-scope > label { display: grid; gap: 4px; color: var(--lite-muted); font-size: 8px; font-weight: 650; }
 .lite-document-scope select { min-width: 0; height: var(--ui-field-height-compact); padding: 0 8px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-small); outline: 0; background: var(--lite-panel); color: var(--lite-text); font: inherit; font-size: 9px; }
 .lite-document-scope select:focus { border-color: var(--lite-focus-border); box-shadow: var(--lite-focus-ring); }
 .lite-document-source-preview { display: flex; min-height: 32px; align-items: center; gap: 6px; padding: 0 9px; border: 1px solid var(--lite-border); border-radius: 8px; background: var(--lite-panel); color: var(--lite-accent); font-size: 8px; line-height: 1.25; }
 .lite-document-source-preview.is-loading { color: var(--lite-muted); }
+.lite-source-selector { position: relative; min-width: 0; }
+.lite-source-selector > summary { display: grid; min-height: var(--ui-field-height-compact); grid-template-columns: auto minmax(0, 1fr) 14px; align-items: center; gap: 6px; padding: 0 8px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-small); background: var(--lite-panel); color: var(--lite-muted); font-size: 8px; cursor: pointer; list-style: none; }
+.lite-source-selector > summary::-webkit-details-marker { display: none; }
+.lite-source-selector > summary strong { overflow: hidden; color: var(--lite-text); font-size: 9px; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.lite-source-selector > summary svg { transition: transform .16s ease; }
+.lite-source-selector[open] > summary { border-color: var(--lite-focus-border); box-shadow: var(--lite-focus-ring); }
+.lite-source-selector[open] > summary svg { transform: rotate(180deg); }
+.lite-source-selector-menu { position: absolute; z-index: 12; top: calc(100% + 6px); left: 0; display: grid; width: min(330px, calc(100vw - 36px)); max-height: 290px; gap: 3px; padding: 7px; overflow: auto; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-card); background: var(--lite-panel); box-shadow: var(--ui-shadow-card); scrollbar-width: thin; }
+.lite-source-selector-menu label { display: grid; min-height: var(--ui-field-height-compact); grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 5px 7px; border-radius: var(--ui-radius-small); color: var(--lite-text); font-size: 9px; cursor: pointer; }
+.lite-source-selector-menu label:hover { background: var(--lite-control); }
+.lite-source-selector-menu input { width: 13px; height: 13px; margin: 0; accent-color: var(--lite-accent); }
+.lite-source-selector-menu label > span { display: grid; min-width: 0; gap: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lite-source-selector-menu label small { color: var(--lite-muted); font-size: 8px; font-weight: 500; }
+.lite-source-selector-menu > label > span small { white-space: normal; }
+.lite-source-group-master { border-bottom: 1px solid var(--lite-border); }
+.lite-source-contexts { display: grid; gap: 2px; padding: 2px 0 4px 14px; border-bottom: 1px solid var(--lite-border); }
+.lite-provider-required { display: flex; align-items: center; gap: 6px; margin: 8px 18px 0; color: var(--lite-danger); font-size: 8px; }
 .lite-magic-body { flex: 1; min-height: 0; padding: 18px; overflow: auto; }
 .lite-magic-body .lite-empty { min-height: 100%; }
 .lite-direct-answer { display: grid; align-content: start; gap: 13px; min-height: 100%; padding: 17px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-card); background: var(--lite-panel); }
@@ -1154,6 +1171,13 @@
 .lite-direct-sources-title small { display: grid; min-width: 18px; height: 18px; place-items: center; padding: 0 5px; border-radius: 999px; background: var(--lite-control); color: var(--lite-muted); font-size: 8px; font-weight: 650; }
 .lite-direct-sources .lite-document-source-list { max-height: 250px; padding-bottom: 0; }
 .lite-direct-sources .lite-document-source-open { padding-right: 7px; }
+.lite-search-results { display: flex; min-height: 100%; flex-direction: column; gap: 8px; padding: 10px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-card); background: var(--lite-panel); }
+.lite-search-results .lite-document-source-list { flex: 1; max-height: none; }
+.lite-search-results .lite-document-source-open { padding-right: 7px; }
+.lite-search-results .lite-document-source-list em { overflow: hidden; color: var(--lite-accent); font-size: 7px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.lite-load-more { align-self: center; min-height: var(--ui-control-height-compact); padding: 0 12px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-control); background: var(--lite-control); color: var(--lite-text); font: inherit; font-size: 9px; font-weight: 650; cursor: pointer; }
+.lite-load-more:hover { border-color: var(--lite-focus-border); color: var(--lite-accent); }
+.lite-load-more:disabled { opacity: .55; cursor: default; }
 .lite-document-created { display: grid; min-height: 100%; align-content: center; justify-items: center; gap: 15px; padding: 24px; border: 1px solid var(--lite-border); border-radius: var(--ui-radius-card); background: var(--lite-panel); text-align: center; }
 .lite-document-created-icon { display: grid; width: 50px; height: 50px; place-items: center; border-radius: 16px; background: var(--lite-accent-soft); color: var(--lite-accent); }
 .lite-document-created h2 { max-width: 480px; margin: 5px 0 7px; font-size: 20px; line-height: 1.25; }

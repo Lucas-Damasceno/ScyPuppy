@@ -100,18 +100,20 @@ ScryPuppy keeps captured knowledge on the user's device and makes every AI actio
 
 The beta should lead with privacy, fast retrieval, and clear source attribution.
 
-## Sources
+## Sources used
 
 1. Browser — Research summary: local-first knowledge tools
 2. Slack — Quarterly launch checklist and stakeholder notes
 3. Windows Terminal — Reference: Windows packaging safeguards`,
   provider: "deepseek",
   model: "deepseek-v4-flash",
-  retrieval_engine: "fts5+e5+rrf",
-  retrieval_model: "intfloat/multilingual-e5-small",
+  retrieval_engine: "filtered-scope",
+  retrieval_model: null,
   filters: {
     query: "product launch and privacy decisions",
-    context_id: null,
+    context_ids: [productLaunch.id, research.id],
+    include_knowledge_base: true,
+    include_inbox: true,
     tag: null,
     date_from: null,
     date_to: null,
@@ -172,6 +174,7 @@ let settings: Settings = createDefaultSettings({
   onboarding_completed: true,
   retention_policy: "3_months",
   data_dir: "C:\\Users\\You\\AppData\\Roaming\\com.scryppy.desktop",
+  ai_api_key_configured: true,
 });
 
 const localSearchStatus: LocalSearchStatus = {
@@ -309,7 +312,24 @@ export function installDocsPreview(): void {
         { id: "deepseek", name: "DeepSeek", models: [{ id: "deepseek-v4-flash", name: "DeepSeek V4 Flash" }] },
         { id: "openai", name: "OpenAI", models: [{ id: "gpt-5-mini", name: "GPT-5 mini" }] },
       ];
-      if (command === "preview_magic_search") return { evidence_count: 12, available_count: 24 };
+      if (command === "preview_magic_search") return { evidence_count: 24, available_count: 24, batch_count: 2 };
+      if (command === "search_magic_items") {
+        const request = (args as { request?: { offset?: number; limit?: number } } | undefined)?.request;
+        const offset = request?.offset ?? 0;
+        const limit = request?.limit ?? 20;
+        const items = captures.map((item) => ({
+          capture_id: item.id,
+          captured_at: item.captured_at,
+          context_names: item.contexts.map((context) => context.name),
+          app_name: item.source_app_name,
+          application_id: null,
+          window_title: item.window_title,
+          excerpt: item.content_text,
+          matched_fields: ["semantic"],
+          asset_paths: [],
+        }));
+        return { items: items.slice(offset, offset + limit), total: items.length, has_more: offset + limit < items.length };
+      }
       if (command === "list_magic_searches") return previewDocumentHistory;
       if (command === "get_magic_search") return previewDocument;
       if (command === "add_captures_to_context") {
