@@ -194,17 +194,18 @@ Deletion removes matching capture records transactionally, then securely removes
 ## Search and documents
 
 - Local Search filters stored captures without an external request.
-- Ask ScryPuppy retrieves evidence with weighted FTS5 BM25 and, when the optional model is ready, a brute-force cosine scan over the complete filtered vector corpus. Reciprocal Rank Fusion uses `k=60` and deterministic recency/ID tie breakers.
-- Local beta mode requires Multilingual E5 Small and keeps retrieval and deterministic synthesis on the computer. Provider mode uses the same local retrieval when available, remains functional with FTS5 alone, and preserves the deterministic fallback when no key is configured or the provider fails.
+- Ask ScryPuppy search retrieves captures with weighted FTS5 BM25 plus a brute-force E5 cosine scan. Reciprocal Rank Fusion uses `k=60`, deterministic recency/ID tie breakers, a stable 200-candidate ceiling, and 20-item UI pages.
+- Search requires Multilingual E5 Small, stays entirely on the computer, never calls a provider, and does not persist result pages as generated documents.
 - E5 inputs use the model's `query:` and `passage:` prefixes. One normalized vector is stored per capture. New or changed canonical content invalidates only that capture's vector.
 - FastEmbed owns the runtime download/cache under `models/fastembed`. An atomic `installed.json` marker prevents an unsuccessful download from being treated as installed. Startup never initiates a first download.
-- Local Magic Search becomes available only after the explicit model download/load and full initial library index. Incremental captures are immediately searchable through FTS5 while their vectors are added in the background.
-- Quick-answer mode returns a focused result with its evidence.
-- Document mode creates editable, versioned Markdown with numbered sources.
+- Local Magic Search becomes available only after the explicit model download/load and full initial library index.
+- Document mode bypasses FTS5 and E5. It unions the selected Contexts, Knowledge Base, and Inbox, deduplicates captures, applies the period, and sends every provider-safe text record to the configured AI provider.
+- Provider inputs are packed into bounded batches; oversized captures are split, intermediate extracts preserve opaque capture citations, and hierarchical consolidation produces editable, versioned Markdown with numbered sources.
+- Missing credentials or any provider failure abort generation without a local fallback or partial document record.
 - Evidence snapshots remain durable so a document keeps its source trail.
 - Export uses the native save dialog and is performed locally by a Rust command at the path explicitly chosen by the user.
 
-The Ask ScryPuppy webview remains alive while hidden. Contexts are refreshed on every `magic-search-opened` event, not only at React mount. Removed Context selections are reset before preview or generation.
+The Ask ScryPuppy webview remains alive while hidden. Contexts are refreshed on every `magic-search-opened` event, not only at React mount. Every Context plus Knowledge Base and Inbox starts selected; removed Contexts are discarded and new Contexts join an active all-selected state.
 
 ## Settings and onboarding
 

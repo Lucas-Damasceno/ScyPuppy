@@ -126,11 +126,15 @@ export type TagDocument = {
   period_start: string | null; period_end: string | null;
 };
 export type MagicSearchRequest = {
-  query: string; context_id: string | null; tag: string | null;
+  query: string; context_ids?: string[]; include_knowledge_base?: boolean; include_inbox?: boolean;
+  context_id?: string | null; tag: string | null;
   date_from: string | null; date_to: string | null; limit: number; previous_document_id: string | null;
   response_mode?: "direct" | "brief" | "document";
 };
-export type MagicSearchPreview = { evidence_count: number; available_count: number };
+export type MagicSearchPreview = { evidence_count: number; available_count: number; batch_count: number };
+export type MagicSearchItemsRequest = { query: string; offset: number; limit: number };
+export type MagicSearchItemsPage = { items: EvidenceItem[]; total: number; has_more: boolean };
+export type DocumentGenerationProgress = { phase: "preparing" | "batching" | "synthesizing" | "saving" | "complete"; completed: number; total: number };
 export type MagicSearchDocument = {
   id: string; root_id: string; previous_document_id: string | null; version: number;
   title: string; query: string; markdown: string; provider: string; model: string;

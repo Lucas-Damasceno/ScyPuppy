@@ -97,7 +97,7 @@ export function OnboardingTutorial({
     {
       eyebrow: tr("Step 4 · Quick access"),
       title: tr("Find and paste without breaking your flow"),
-      description: tr("Quick Paste reuses a previous copy, while Magic Search gives you a direct answer and keeps the source one click away."),
+      description: tr("Quick Paste reuses a previous copy, while Magic Search returns a ranked local list with every source one click away."),
     },
     {
       eyebrow: tr("Step 5 · Personalize"),

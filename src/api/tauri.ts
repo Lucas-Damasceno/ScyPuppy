@@ -3,7 +3,7 @@ import { normalizeCommandError } from "../appMessages";
 import type {
   AiProviderOption, ApplyContextSuggestion, ApplyContextSuggestionsResult, Capture, CaptureFilter, CapturePage, Category,
   ChatAnswer, ChatRequest, Context, ContextAnalysisResult, DataCleanupFilter, DataCleanupPreview, DataCleanupResult,
-  LibraryCounts, LocalSearchStatus, MagicSearchDocument, MagicSearchListItem, MagicSearchPreview, MagicSearchRequest,
+  LibraryCounts, LocalSearchStatus, MagicSearchDocument, MagicSearchItemsPage, MagicSearchItemsRequest, MagicSearchListItem, MagicSearchPreview, MagicSearchRequest,
   RetentionApplyResult, RetentionPolicy, RetentionPreview, SaveSmartContextRuleResult, Settings, SmartContextRule, SmartContextRulePreview, TagDocument,
 } from "../types";
 
@@ -78,6 +78,7 @@ export const openMagicDocument = (id: string) => invoke<void>("open_magic_docume
 export const getTagDocument = (tag: string) => invoke<TagDocument>("get_tag_document", { tag });
 export const exportTagDocument = (tag: string) => invoke<string>("export_tag_document", { tag });
 export const generateMagicSearch = (request: MagicSearchRequest) => invoke<MagicSearchDocument>("generate_magic_search", { request });
+export const searchMagicItems = (request: MagicSearchItemsRequest) => invoke<MagicSearchItemsPage>("search_magic_items", { request });
 export const previewMagicSearch = (request: MagicSearchRequest) => invoke<MagicSearchPreview>("preview_magic_search", { request });
 export const listMagicSearches = () => invoke<MagicSearchListItem[]>("list_magic_searches");
 export const getMagicSearch = (id: string) => invoke<MagicSearchDocument>("get_magic_search", { id });
