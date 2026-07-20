@@ -1,6 +1,6 @@
 [package]
 name = "scrypuppy"
-version = "1.0.0-beta.10"
+version = "1.0.0-beta.12"
 description = "Context-aware clipboard history for desktop"
 authors = ["ScryPuppy"]
 edition = "2021"
