@@ -237,9 +237,13 @@ export function installDocsPreview(): void {
       return path;
     },
     async invoke(command: string, args?: unknown): Promise<unknown> {
+      if (command === "plugin:window|theme") {
+        return new URLSearchParams(window.location.search).get("theme") === "dark" ? "dark" : "light";
+      }
       if (command === "plugin:event|listen") return callbackId;
       if (command === "plugin:event|unlisten" || command === "plugin:event|emit" || command === "plugin:event|emit_to") return undefined;
       if (command === "list_contexts") return [productLaunch, research];
+      if (command === "list_recent_contexts") return [research, productLaunch];
       if (command === "list_context_rules") return smartRules;
       if (command === "preview_context_rule") return { match_count: 3, samples: [captures[2], captures[7]] };
       if (command === "save_context_rule") {

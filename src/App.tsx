@@ -10,6 +10,7 @@ import { BrandMark } from "./components/BrandMark";
 import { AiControls, ClipboardCaptureControls, QuickContextControls, RetentionControls, SettingsSaveFeedback, StartupAndShortcutsControls } from "./components/SettingsControls";
 import { useAutoCloseTimer } from "./hooks/useAutoCloseTimer";
 import { useSettingsCoordinator } from "./hooks/useSettingsCoordinator";
+import { useWindowTheme } from "./hooks/useWindowTheme";
 import { captureDisplayText, normalizeLanguage, translate, translateLegacyGeneratedContent, type AppLanguage } from "./i18n";
 import { LiteMagicPalette, LiteMainApp } from "./LiteApp";
 import { appDefaultSettings } from "./config/defaultSettings";
@@ -302,10 +303,36 @@ const pastePreviewItems = [
   { id: "preview-3", content_text: "Ctrl + Shift + V opens ScryPuppy's quick history", source_app_name: "ScryPuppy", captured_at: new Date(Date.now() - 3_600_000).toISOString(), kind: "reference", assets: [] },
 ] as unknown as Capture[];
 
+const quickContextPreviewCapture: Capture = {
+  id: "quick-context-preview",
+  content_text: "The capture popup now follows the Windows color theme.",
+  captured_at: new Date().toISOString(),
+  source_app_name: "Visual Studio Code",
+  source_app_id: null,
+  source_process_id: null,
+  source_process_path: null,
+  window_title: null,
+  window_id: null,
+  platform: "windows",
+  kind: "capture",
+  content_kind: "text",
+  metadata: {},
+  assets: [],
+  representations: [],
+  files: [],
+  clipboard_formats: [],
+  tags: [],
+  entities: [],
+  ocr: null,
+  contexts: [],
+};
+
 const defaultSettings = appDefaultSettings;
 
 function QuickContextPanel() {
-  const [capture, setCapture] = useState<Capture | null>(null);
+  const windowTheme = useWindowTheme();
+  const isDocsPreview = import.meta.env.DEV && new URLSearchParams(window.location.search).has("docs-preview");
+  const [capture, setCapture] = useState<Capture | null>(isDocsPreview ? quickContextPreviewCapture : null);
   const [contexts, setContexts] = useState<Context[]>([]);
   const [recentContexts, setRecentContexts] = useState<Context[]>([]);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -407,7 +434,7 @@ function QuickContextPanel() {
     finally { setSavingContextId(null); }
   }
 
-  if (!capture) return <main className="quick-context-shell" />;
+  if (!capture) return <main className="quick-context-shell" data-theme={windowTheme} />;
   const normalizedSearch = search.trim().toLowerCase();
   const defaultChoices = settings.quick_context_show_recent && recentContexts.length > 0
     ? [...capture.contexts, ...recentContexts].filter((context, index, values) => values.findIndex((item) => item.id === context.id) === index)
@@ -433,7 +460,7 @@ function QuickContextPanel() {
   }
 
   return (
-    <main className="quick-context-shell">
+    <main className="quick-context-shell" data-theme={windowTheme}>
       <section className="quick-context-panel" aria-label={tr("Quick context panel")} onPointerDownCapture={registerInteraction} onKeyDownCapture={registerInteraction} onFocusCapture={registerInteraction}>
         <header>
           <div className="quick-context-brand"><BrandMark /></div>
