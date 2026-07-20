@@ -5,13 +5,14 @@ import {
   AiControls,
   ClipboardCaptureControls,
   QuickContextControls,
+  RetentionControls,
   SettingsSaveFeedback,
   StartupAndShortcutsControls,
 } from "../../components/SettingsControls";
 import type { SettingsSaveState } from "../../hooks/useSettingsCoordinator";
 import { useTauriEvent } from "../../hooks/useTauriEvent";
 import { normalizeLanguage, translate, type AppLanguage } from "../../i18n";
-import type { AiProviderOption, LocalSearchStatus, Settings } from "../../types";
+import type { AiProviderOption, LocalSearchStatus, RetentionApplyResult, Settings } from "../../types";
 import { AppUpdateSettings } from "../updates/AppUpdateNotice";
 import type { AppUpdaterController } from "../updates/useAppUpdater";
 import { LiteIcon } from "./LiteIcon";
@@ -27,12 +28,13 @@ type LiteSettingsDialogProps = {
   onClearCredential: () => Promise<void>;
   onRetry: () => void;
   onDeleteAll: () => Promise<void>;
+  onRetentionApplied: (result: RetentionApplyResult) => Promise<void>;
   onClose: () => void;
   onOpenTutorial: () => void;
   onStatus: (message: string | null) => void;
 };
 
-export function LiteSettingsDialog({ settings, aiOptions, language, updater, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
+export function LiteSettingsDialog({ settings, aiOptions, language, updater, saveState, saveError, onPatch, onClearCredential, onRetry, onDeleteAll, onRetentionApplied, onClose, onOpenTutorial, onStatus }: LiteSettingsDialogProps) {
   const tr = (english: string, variables?: MessageParams) => translate(language, english, variables);
   const [localStatus, setLocalStatus] = useState<LocalSearchStatus | null>(null);
   const [localActionPending, setLocalActionPending] = useState(false);
@@ -135,6 +137,7 @@ export function LiteSettingsDialog({ settings, aiOptions, language, updater, sav
           </section>
           <section className="settings-group">
             <div className="settings-group-title"><LiteIcon name="lock" /><div><strong>{tr("Protected local data")}</strong><span>{tr("Your history is encrypted on this computer")}</span></div></div>
+            <RetentionControls settings={settings} tr={tr} onApplied={onRetentionApplied} onStatus={(message) => onStatus(message)} />
             <div className="storage-path"><LiteIcon name="folder" /><code>{settings.data_dir || tr("Loading...")}</code></div>
             <div className="settings-actions">
               <button className="secondary-button wide" onClick={() => api.resyncContexts().then(() => onStatus(tr("Data resynchronized."))).catch((error) => onStatus(formatAppError(error, tr)))}><LiteIcon name="refresh" />{tr("Resynchronize data")}</button>

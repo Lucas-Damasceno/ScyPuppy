@@ -4,7 +4,7 @@ import type {
   AiProviderOption, ApplyContextSuggestion, ApplyContextSuggestionsResult, Capture, CaptureFilter, CapturePage, Category,
   ChatAnswer, ChatRequest, Context, ContextAnalysisResult, DataCleanupFilter, DataCleanupPreview, DataCleanupResult,
   LibraryCounts, LocalSearchStatus, MagicSearchDocument, MagicSearchListItem, MagicSearchPreview, MagicSearchRequest,
-  SaveSmartContextRuleResult, Settings, SmartContextRule, SmartContextRulePreview, TagDocument,
+  RetentionApplyResult, RetentionPolicy, RetentionPreview, SaveSmartContextRuleResult, Settings, SmartContextRule, SmartContextRulePreview, TagDocument,
 } from "../types";
 
 async function invoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
@@ -59,6 +59,8 @@ export const clearAiApiKey = () => invoke<Settings>("clear_ai_api_key");
 export const deleteAllData = () => invoke<void>("delete_all_data");
 export const previewDataCleanup = (filter: DataCleanupFilter) => invoke<DataCleanupPreview>("preview_data_cleanup", { filter });
 export const deleteDataByFilter = (filter: DataCleanupFilter, selectionToken: string) => invoke<DataCleanupResult>("delete_data_by_filter", { filter, selectionToken });
+export const previewRetentionChange = (policy: RetentionPolicy) => invoke<RetentionPreview>("preview_retention_change", { policy });
+export const applyRetentionChange = (policy: RetentionPolicy, existingAction: "delete" | "keep", selectionToken: string) => invoke<RetentionApplyResult>("apply_retention_change", { policy, existingAction, selectionToken });
 export const listPasteItems = (search: string, page: number, pageSize = 10) => invoke<CapturePage>("list_paste_page", {
   search: search.trim() || null,
   limit: pageSize,

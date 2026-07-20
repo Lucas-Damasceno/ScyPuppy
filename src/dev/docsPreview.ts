@@ -170,6 +170,7 @@ let smartRules: SmartContextRule[] = [{
 let settings: Settings = createDefaultSettings({
   language: "en",
   onboarding_completed: true,
+  retention_policy: "3_months",
   data_dir: "C:\\Users\\You\\AppData\\Roaming\\com.scryppy.desktop",
 });
 
@@ -267,7 +268,22 @@ export function installDocsPreview(): void {
         };
       }
       if (command === "delete_data_by_filter") return { deleted_count: 7, reclaimed_bytes: 14_417_920 };
-      if (command === "get_library_counts") return { all: 24, inbox: 10, content_base: 3 };
+      if (command === "preview_retention_change") return {
+        selection_token: "docs-preview-retention",
+        capture_count: 7,
+        image_count: 3,
+        file_count: 2,
+        reclaimable_bytes: 14_417_920,
+        oldest_captured_at: captures[captures.length - 1]?.captured_at ?? null,
+        newest_captured_at: captures[0].captured_at,
+      };
+      if (command === "apply_retention_change") {
+        const policy = (args as { policy?: Settings["retention_policy"] } | undefined)?.policy ?? settings.retention_policy;
+        const existingAction = (args as { existingAction?: string } | undefined)?.existingAction;
+        settings = { ...settings, retention_policy: policy };
+        return { settings, deleted_count: existingAction === "delete" ? 7 : 0, reclaimed_bytes: existingAction === "delete" ? 14_417_920 : 0 };
+      }
+      if (command === "get_library_counts") return { all: 24, inbox: 10, knowledge_base: 3 };
       if (command === "list_categories") return [];
       if (command === "list_captures") return filterCaptures(args);
       if (command === "list_capture_page") return capturePage(args);
